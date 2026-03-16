@@ -2,6 +2,8 @@
 -- Schema inicial: Sistema de Gestión de Inventario Institucional
 -- =============================================================
 
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 CREATE TYPE user_role AS ENUM (
   'auxiliarInventario',
   'administrador',
@@ -18,12 +20,21 @@ CREATE TABLE users (
   email           VARCHAR(200)  UNIQUE NOT NULL,
   password_hash   VARCHAR(255)  NOT NULL,
   roles           user_role[]   NOT NULL DEFAULT '{}',
+  area            VARCHAR(200)  NOT NULL DEFAULT '',
   is_active       BOOLEAN       NOT NULL DEFAULT TRUE,
   last_session    TIMESTAMPTZ,
   failed_attempts INT           NOT NULL DEFAULT 0,
   lock_until      TIMESTAMPTZ,
   created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
+
+-- Usuarios demo (contraseñas con bcrypt via pgcrypto)
+INSERT INTO users (id, username, full_name, email, password_hash, roles, area) VALUES
+  ('U001', 'admin',    'Admin General',          'admin@universidad.edu',    crypt('admin123', gen_salt('bf')), ARRAY['administrador','soporteTI']::user_role[],         'Direccion Administrativa'),
+  ('U002', 'auxiliar', 'Auxiliar Inventario',    'auxiliar@universidad.edu', crypt('aux123',   gen_salt('bf')), ARRAY['auxiliarInventario']::user_role[],                'Almacen e Inventarios'),
+  ('U003', 'auditor',  'Auditor Institucional',  'auditor@universidad.edu',  crypt('audit123', gen_salt('bf')), ARRAY['auditor']::user_role[],                          'Control Interno'),
+  ('U004', 'daf',      'Director Administrativo','daf@universidad.edu',      crypt('daf123',   gen_salt('bf')), ARRAY['direccionAdminFin']::user_role[],                 'Direccion Administrativa y Financiera'),
+  ('U005', 'resp',     'Responsable de Area',    'resp@universidad.edu',     crypt('resp123',  gen_salt('bf')), ARRAY['responsableArea']::user_role[],                   'Facultad de Ingenieria');
 
 -- ---------------------------------------------------------------
 

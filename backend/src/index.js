@@ -2,6 +2,7 @@ const express = require('express');
 const helmet  = require('helmet');
 const cors    = require('cors');
 
+const authRouter       = require('./routes/auth');
 const usersRouter      = require('./routes/users');
 const assetsRouter     = require('./routes/assets');
 const inventoryRouter  = require('./routes/inventory');
@@ -19,6 +20,7 @@ app.use(express.json());
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 // ---- Rutas ----
+app.use('/api/auth',         authRouter);
 app.use('/api/users',        usersRouter);
 app.use('/api/assets',       assetsRouter);
 app.use('/api/inventory',    inventoryRouter);

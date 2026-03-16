@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
@@ -877,12 +878,72 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
+  /// URL base del backend. Configurable en tiempo de compilación con
+  /// --dart-define=BACKEND_URL=http://10.0.2.2:3000  (Android emulador)
+  static const _backendUrl = String.fromEnvironment(
+    'BACKEND_URL',
+    defaultValue: 'http://localhost:3000',
+  );
+
   /// Retorna null si el login fue exitoso.
   /// Retorna un String con el codigo del error para que la UI distinga el tipo:
   ///   Prefijo  LOCK:segundos   - cuenta bloqueada (RF03)
   ///   Prefijo  WARN:restantes  - credenciales invalidas, muestra intentos restantes (RF03)
   ///   Prefijo  INFO:mensaje    - error informativo sin conteo
-  String? login(String username, String password) {
+  Future<String?> login(String username, String password) async {
+    if (authMode == AuthMode.institutional) {
+      return _loginWithBackend(username.trim(), password);
+    }
+    return _loginLocal(username.trim(), password);
+  }
+
+  Future<String?> _loginWithBackend(String username, String password) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_backendUrl/api/auth/login'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'username': username, 'password': password}),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+
+      if (response.statusCode == 200) {
+        final rawRoles = (body['roles'] as List).cast<String>();
+        final appUser = AppUser(
+          id:       body['id'] as String,
+          username: body['username'] as String,
+          fullName: body['fullName'] as String,
+          email:    body['email'] as String,
+          password: '', // no almacenamos la contraseña en cliente
+          area:     (body['area'] as String?) ?? '',
+          roles:    rawRoles
+              .map((r) => UserRole.values.byName(r))
+              .toList(),
+          isActive: body['isActive'] as bool,
+        );
+        currentUser = appUser;
+        notifyListeners();
+        return null;
+      }
+
+      final code    = body['code'] as String? ?? 'INFO';
+      final message = body['message'] as String? ?? '';
+      final seconds = body['seconds'] as int? ?? 900;
+      final remaining = body['remaining'] as int? ?? 0;
+
+      if (code == 'LOCK') return 'LOCK:$seconds';
+      if (code == 'WARN') return 'WARN:$remaining';
+      return 'INFO:$message';
+    } on http.ClientException {
+      return 'INFO:No se pudo conectar al servidor. Verifique la red o use el modo local.';
+    } catch (_) {
+      return 'INFO:Error inesperado al contactar el backend.';
+    }
+  }
+
+  String? _loginLocal(String username, String password) {
     final user = _findUserByUsername(username.trim());
     if (user == null) {
       return 'INFO:Usuario no encontrado';
@@ -1426,18 +1487,28 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
+  bool _isLoading = false;
+
   void _handleLogin() {
+    _doLogin();
+  }
+
+  Future<void> _doLogin() async {
+    if (_isLoading) return;
     _lockTimer?.cancel();
-    final raw = widget.state.login(
+    setState(() => _isLoading = true);
+    final raw = await widget.state.login(
       _userController.text,
       _passwordController.text,
     );
+    if (!mounted) return;
+    setState(() => _isLoading = false);
     if (raw == null) {
       return; // exitoso → AppState notifica y la app navega a HomePage
     }
     final parts = raw.split(':');
     final prefix = parts[0];
-    final payload = parts.length > 1 ? parts[1] : '';
+    final payload = parts.length > 1 ? parts.sublist(1).join(':') : '';
 
     if (prefix == 'LOCK') {
       final secs = int.tryParse(payload) ?? 900;
@@ -1488,7 +1559,7 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
-    final locked = _authError == _AuthError.locked;
+    final locked = _authError == _AuthError.locked || _isLoading;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF0F7F4),
@@ -1564,7 +1635,16 @@ class _LoginPageState extends State<LoginPage> {
 
                   FilledButton.icon(
                     onPressed: locked ? null : _handleLogin,
-                    icon: const Icon(Icons.login),
+                    icon: _isLoading
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.login),
                     label: const Text('Iniciar sesion'),
                   ),
                   const SizedBox(height: 4),
