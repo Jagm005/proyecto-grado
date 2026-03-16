@@ -9,10 +9,15 @@ import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:postgres/postgres.dart';
 
-void main() {
-  runApp(InventoryApp(state: AppState()..seedData()));
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final state = AppState();
+  await state.load();
+  runApp(InventoryApp(state: state));
 }
 
 class InventoryApp extends StatelessWidget {
@@ -30,9 +35,34 @@ class InventoryApp extends StatelessWidget {
           title: 'Inventario Institucional',
           theme: ThemeData(
             colorScheme: ColorScheme.fromSeed(
-              seedColor: const Color(0xFF0E6BA8),
+              seedColor: const Color(0xFF00804E),
             ),
             useMaterial3: true,
+            textTheme: GoogleFonts.libreFranklinTextTheme(
+              ThemeData.light().textTheme,
+            ),
+            cardTheme: CardThemeData(
+              elevation: 2,
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.all(Radius.circular(12)),
+              ),
+              margin: const EdgeInsets.symmetric(vertical: 4),
+            ),
+            inputDecorationTheme: InputDecorationTheme(
+              filled: true,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 12,
+              ),
+            ),
+            appBarTheme: const AppBarTheme(
+              centerTitle: false,
+              elevation: 0,
+              scrolledUnderElevation: 2,
+            ),
           ),
           home: state.currentUser == null
               ? LoginPage(state: state)
@@ -152,6 +182,7 @@ class AppUser {
     required this.email,
     required this.password,
     required this.roles,
+    this.area = '',
     this.isActive = true,
     this.lastSession,
     this.failedAttempts = 0,
@@ -163,11 +194,46 @@ class AppUser {
   String fullName;
   String email;
   String password;
+  String area;
   List<UserRole> roles;
   bool isActive;
   DateTime? lastSession;
   int failedAttempts;
   DateTime? lockUntil;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'username': username,
+    'fullName': fullName,
+    'email': email,
+    'password': password,
+    'area': area,
+    'roles': roles.map((r) => r.name).toList(),
+    'isActive': isActive,
+    'lastSession': lastSession?.toIso8601String(),
+    'failedAttempts': failedAttempts,
+    'lockUntil': lockUntil?.toIso8601String(),
+  };
+
+  factory AppUser.fromJson(Map<String, dynamic> j) => AppUser(
+    id: j['id'] as String,
+    username: j['username'] as String,
+    fullName: j['fullName'] as String,
+    email: j['email'] as String,
+    password: j['password'] as String,
+    area: (j['area'] as String?) ?? '',
+    roles: (j['roles'] as List)
+        .map((r) => UserRole.values.byName(r as String))
+        .toList(),
+    isActive: j['isActive'] as bool,
+    lastSession: j['lastSession'] != null
+        ? DateTime.parse(j['lastSession'] as String)
+        : null,
+    failedAttempts: j['failedAttempts'] as int,
+    lockUntil: j['lockUntil'] != null
+        ? DateTime.parse(j['lockUntil'] as String)
+        : null,
+  );
 }
 
 class AssetHistoryEvent {
@@ -182,6 +248,21 @@ class AssetHistoryEvent {
   final String action;
   final String detail;
   final String performedBy;
+
+  Map<String, dynamic> toJson() => {
+    'timestamp': timestamp.toIso8601String(),
+    'action': action,
+    'detail': detail,
+    'performedBy': performedBy,
+  };
+
+  factory AssetHistoryEvent.fromJson(Map<String, dynamic> j) =>
+      AssetHistoryEvent(
+        timestamp: DateTime.parse(j['timestamp'] as String),
+        action: j['action'] as String,
+        detail: j['detail'] as String,
+        performedBy: j['performedBy'] as String,
+      );
 }
 
 class Asset {
@@ -192,6 +273,7 @@ class Asset {
     required this.subcategory,
     required this.physicalLocation,
     required this.responsible,
+    required this.responsibleId,
     required this.dependency,
     required this.costCenter,
     required this.acquisitionValue,
@@ -209,6 +291,7 @@ class Asset {
   String subcategory;
   String physicalLocation;
   String responsible;
+  String responsibleId;
   String dependency;
   String costCenter;
   double acquisitionValue;
@@ -218,6 +301,48 @@ class Asset {
   String observations;
   String program;
   final List<AssetHistoryEvent> history;
+
+  Map<String, dynamic> toJson() => {
+    'code': code,
+    'name': name,
+    'category': category,
+    'subcategory': subcategory,
+    'physicalLocation': physicalLocation,
+    'responsible': responsible,
+    'responsibleId': responsibleId,
+    'dependency': dependency,
+    'costCenter': costCenter,
+    'acquisitionValue': acquisitionValue,
+    'acquisitionDate': acquisitionDate.toIso8601String(),
+    'estimatedUsefulLifeYears': estimatedUsefulLifeYears,
+    'state': state.name,
+    'observations': observations,
+    'program': program,
+    'history': history.map((h) => h.toJson()).toList(),
+  };
+
+  factory Asset.fromJson(Map<String, dynamic> j) => Asset(
+    code: j['code'] as String,
+    name: j['name'] as String,
+    category: j['category'] as String,
+    subcategory: j['subcategory'] as String,
+    physicalLocation: j['physicalLocation'] as String,
+    responsible: j['responsible'] as String,
+    responsibleId: (j['responsibleId'] as String?) ?? '',
+    dependency: j['dependency'] as String,
+    costCenter: j['costCenter'] as String,
+    acquisitionValue: (j['acquisitionValue'] as num).toDouble(),
+    acquisitionDate: DateTime.parse(j['acquisitionDate'] as String),
+    estimatedUsefulLifeYears: j['estimatedUsefulLifeYears'] as int,
+    state: AssetState.values.byName(j['state'] as String),
+    observations: j['observations'] as String,
+    program: j['program'] as String,
+    history:
+        (j['history'] as List?)
+            ?.map((h) => AssetHistoryEvent.fromJson(h as Map<String, dynamic>))
+            .toList() ??
+        [],
+  );
 }
 
 class InventoryVerification {
@@ -234,6 +359,23 @@ class InventoryVerification {
   final String notes;
   final DateTime timestamp;
   final String? photoPath;
+
+  Map<String, dynamic> toJson() => {
+    'assetCode': assetCode,
+    'result': result.name,
+    'notes': notes,
+    'timestamp': timestamp.toIso8601String(),
+    'photoPath': photoPath,
+  };
+
+  factory InventoryVerification.fromJson(Map<String, dynamic> j) =>
+      InventoryVerification(
+        assetCode: j['assetCode'] as String,
+        result: VerificationResult.values.byName(j['result'] as String),
+        notes: j['notes'] as String,
+        timestamp: DateTime.parse(j['timestamp'] as String),
+        photoPath: j['photoPath'] as String?,
+      );
 }
 
 class InventorySession {
@@ -257,6 +399,39 @@ class InventorySession {
   final DateTime createdAt;
   final Map<String, AssetState> baselineStates;
   final List<InventoryVerification> verifications = [];
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'site': site,
+    'building': building,
+    'floor': floor,
+    'area': area,
+    'createdAt': createdAt.toIso8601String(),
+    'baselineStates': baselineStates.map((k, v) => MapEntry(k, v.name)),
+    'verifications': verifications.map((v) => v.toJson()).toList(),
+  };
+
+  factory InventorySession.fromJson(Map<String, dynamic> j) {
+    final s = InventorySession(
+      id: j['id'] as String,
+      name: j['name'] as String,
+      site: j['site'] as String,
+      building: j['building'] as String,
+      floor: j['floor'] as String,
+      area: j['area'] as String,
+      createdAt: DateTime.parse(j['createdAt'] as String),
+      baselineStates: (j['baselineStates'] as Map<String, dynamic>).map(
+        (k, v) => MapEntry(k, AssetState.values.byName(v as String)),
+      ),
+    );
+    for (final v in (j['verifications'] as List? ?? [])) {
+      s.verifications.add(
+        InventoryVerification.fromJson(v as Map<String, dynamic>),
+      );
+    }
+    return s;
+  }
 }
 
 class MaintenanceRequest {
@@ -276,6 +451,29 @@ class MaintenanceRequest {
   final String createdBy;
   final DateTime createdAt;
   bool closed = false;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'assetCode': assetCode,
+    'type': type.name,
+    'description': description,
+    'createdBy': createdBy,
+    'createdAt': createdAt.toIso8601String(),
+    'closed': closed,
+  };
+
+  factory MaintenanceRequest.fromJson(Map<String, dynamic> j) {
+    final r = MaintenanceRequest(
+      id: j['id'] as String,
+      assetCode: j['assetCode'] as String,
+      type: MaintenanceType.values.byName(j['type'] as String),
+      description: j['description'] as String,
+      createdBy: j['createdBy'] as String,
+      createdAt: DateTime.parse(j['createdAt'] as String),
+    );
+    r.closed = j['closed'] as bool;
+    return r;
+  }
 }
 
 class DisposalRequest {
@@ -306,6 +504,31 @@ class DisposalRequest {
     }
     return 'Pendiente';
   }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'assetCode': assetCode,
+    'cause': cause,
+    'justification': justification,
+    'createdBy': createdBy,
+    'createdAt': createdAt.toIso8601String(),
+    'approvedByDependency': approvedByDependency,
+    'approvedByDAF': approvedByDAF,
+  };
+
+  factory DisposalRequest.fromJson(Map<String, dynamic> j) {
+    final r = DisposalRequest(
+      id: j['id'] as String,
+      assetCode: j['assetCode'] as String,
+      cause: j['cause'] as String,
+      justification: j['justification'] as String,
+      createdBy: j['createdBy'] as String,
+      createdAt: DateTime.parse(j['createdAt'] as String),
+    );
+    r.approvedByDependency = j['approvedByDependency'] as bool;
+    r.approvedByDAF = j['approvedByDAF'] as bool;
+    return r;
+  }
 }
 
 class PostgresConfig {
@@ -324,17 +547,193 @@ class PostgresConfig {
   String password;
 }
 
+// ── Notificaciones ────────────────────────────────────────────────────────────
+
+enum NotificationStatus { pendiente, aprobada, denegada }
+
+class AppNotification {
+  AppNotification({
+    required this.id,
+    required this.type,
+    required this.title,
+    required this.body,
+    required this.createdAt,
+    required this.fromUser,
+    required this.relatedId,
+    this.toRoles = const [],
+    this.status = NotificationStatus.pendiente,
+    this.read = false,
+  });
+
+  final String id;
+  final String type; // 'maintenance' | 'disposal' | 'info' | 'missing_asset'
+  final String title;
+  final String body;
+  final DateTime createdAt;
+  final String fromUser;
+  final String relatedId;
+
+  /// Si no está vacío, solo los usuarios con alguno de estos roles la ven.
+  final List<String> toRoles;
+  NotificationStatus status;
+  bool read;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'type': type,
+    'title': title,
+    'body': body,
+    'createdAt': createdAt.toIso8601String(),
+    'fromUser': fromUser,
+    'relatedId': relatedId,
+    'toRoles': toRoles,
+    'status': status.name,
+    'read': read,
+  };
+
+  factory AppNotification.fromJson(Map<String, dynamic> j) => AppNotification(
+    id: j['id'] as String,
+    type: j['type'] as String,
+    title: j['title'] as String,
+    body: j['body'] as String,
+    createdAt: DateTime.parse(j['createdAt'] as String),
+    fromUser: j['fromUser'] as String,
+    relatedId: j['relatedId'] as String,
+    toRoles: (j['toRoles'] as List?)?.map((e) => e as String).toList() ?? [],
+    status: NotificationStatus.values.byName(
+      (j['status'] as String?) ?? 'pendiente',
+    ),
+    read: (j['read'] as bool?) ?? false,
+  );
+}
+
 class AppState extends ChangeNotifier {
   final List<AppUser> users = [];
   final List<Asset> assets = [];
   final List<InventorySession> inventorySessions = [];
   final List<MaintenanceRequest> maintenanceRequests = [];
   final List<DisposalRequest> disposalRequests = [];
+  final List<AppNotification> notifications = [];
   final PostgresConfig postgresConfig = PostgresConfig();
 
   AppUser? currentUser;
   AuthMode authMode = AuthMode.institutional;
   int maxFailedAttempts = 3;
+
+  int get unreadCount =>
+      notifications.where((n) => !n.read && _notifVisibleToMe(n)).length;
+
+  bool _notifVisibleToMe(AppNotification n) {
+    if (currentUser == null) return false;
+    // El solicitante siempre ve sus propias notificaciones
+    if (n.fromUser == currentUser!.username) return true;
+    // Si la notificacion tiene roles objetivo, el usuario debe tener alguno
+    if (n.toRoles.isNotEmpty) {
+      return currentUser!.roles.any((r) => n.toRoles.contains(r.name));
+    }
+    // Sin roles objetivo: solo admins ven todo lo pendiente
+    return currentUser!.roles.contains(UserRole.administrador);
+  }
+
+  List<AppNotification> get myNotifications =>
+      notifications.where(_notifVisibleToMe).toList()
+        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+  @override
+  void notifyListeners() {
+    super.notifyListeners();
+    _save().catchError((e) => debugPrint('Persistence error: $e'));
+  }
+
+  Future<void> load() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final usersData = prefs.getString('users');
+    if (usersData != null) {
+      users.clear();
+      for (final j in jsonDecode(usersData) as List) {
+        users.add(AppUser.fromJson(j as Map<String, dynamic>));
+      }
+    }
+
+    final assetsData = prefs.getString('assets');
+    if (assetsData != null) {
+      assets.clear();
+      for (final j in jsonDecode(assetsData) as List) {
+        assets.add(Asset.fromJson(j as Map<String, dynamic>));
+      }
+    }
+
+    final sessionsData = prefs.getString('inventorySessions');
+    if (sessionsData != null) {
+      inventorySessions.clear();
+      for (final j in jsonDecode(sessionsData) as List) {
+        inventorySessions.add(
+          InventorySession.fromJson(j as Map<String, dynamic>),
+        );
+      }
+    }
+
+    final maintData = prefs.getString('maintenanceRequests');
+    if (maintData != null) {
+      maintenanceRequests.clear();
+      for (final j in jsonDecode(maintData) as List) {
+        maintenanceRequests.add(
+          MaintenanceRequest.fromJson(j as Map<String, dynamic>),
+        );
+      }
+    }
+
+    final disposalData = prefs.getString('disposalRequests');
+    if (disposalData != null) {
+      disposalRequests.clear();
+      for (final j in jsonDecode(disposalData) as List) {
+        disposalRequests.add(
+          DisposalRequest.fromJson(j as Map<String, dynamic>),
+        );
+      }
+    }
+
+    final notifData = prefs.getString('notifications');
+    if (notifData != null) {
+      notifications.clear();
+      for (final j in jsonDecode(notifData) as List) {
+        notifications.add(AppNotification.fromJson(j as Map<String, dynamic>));
+      }
+    }
+
+    if (users.isEmpty) {
+      seedData();
+    }
+  }
+
+  Future<void> _save() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      'users',
+      jsonEncode(users.map((u) => u.toJson()).toList()),
+    );
+    await prefs.setString(
+      'assets',
+      jsonEncode(assets.map((a) => a.toJson()).toList()),
+    );
+    await prefs.setString(
+      'inventorySessions',
+      jsonEncode(inventorySessions.map((s) => s.toJson()).toList()),
+    );
+    await prefs.setString(
+      'maintenanceRequests',
+      jsonEncode(maintenanceRequests.map((m) => m.toJson()).toList()),
+    );
+    await prefs.setString(
+      'disposalRequests',
+      jsonEncode(disposalRequests.map((d) => d.toJson()).toList()),
+    );
+    await prefs.setString(
+      'notifications',
+      jsonEncode(notifications.map((n) => n.toJson()).toList()),
+    );
+  }
 
   void seedData() {
     if (users.isNotEmpty) {
@@ -347,6 +746,7 @@ class AppState extends ChangeNotifier {
         fullName: 'Admin General',
         email: 'admin@universidad.edu',
         password: 'admin123',
+        area: 'Direccion Administrativa',
         roles: [UserRole.administrador, UserRole.soporteTI],
       ),
       AppUser(
@@ -355,6 +755,7 @@ class AppState extends ChangeNotifier {
         fullName: 'Auxiliar Inventario',
         email: 'auxiliar@universidad.edu',
         password: 'aux123',
+        area: 'Almacen e Inventarios',
         roles: [UserRole.auxiliarInventario],
       ),
       AppUser(
@@ -363,6 +764,7 @@ class AppState extends ChangeNotifier {
         fullName: 'Auditoria Interna',
         email: 'auditor@universidad.edu',
         password: 'audit123',
+        area: 'Control Interno',
         roles: [UserRole.auditor],
       ),
       AppUser(
@@ -371,6 +773,7 @@ class AppState extends ChangeNotifier {
         fullName: 'Direccion Admin Fin',
         email: 'daf@universidad.edu',
         password: 'daf123',
+        area: 'Finanzas',
         roles: [UserRole.direccionAdminFin],
       ),
     ]);
@@ -381,9 +784,10 @@ class AppState extends ChangeNotifier {
         name: 'Laptop Dell 5420',
         category: 'Computo',
         subcategory: 'Portatil',
-        physicalLocation: 'Sede Centro - Bloque A - Piso 2',
+        physicalLocation: 'Almacen e Inventarios',
         responsible: 'Auxiliar Inventario',
-        dependency: 'Direccion Administrativa',
+        responsibleId: 'U002',
+        dependency: 'Almacen e Inventarios',
         costCenter: 'CC-ADM-01',
         acquisitionValue: 3800000,
         acquisitionDate: DateTime(2023, 4, 5),
@@ -401,16 +805,17 @@ class AppState extends ChangeNotifier {
         name: 'Silla Ergonomica',
         category: 'Mobiliario',
         subcategory: 'Silla',
-        physicalLocation: 'Sede Norte - Bloque C - Piso 1',
-        responsible: 'Responsable Area Sistemas',
-        dependency: 'Tecnologia',
-        costCenter: 'CC-TI-02',
+        physicalLocation: 'Direccion Administrativa',
+        responsible: 'Admin General',
+        responsibleId: 'U001',
+        dependency: 'Direccion Administrativa',
+        costCenter: 'CC-ADM-01',
         acquisitionValue: 890000,
         acquisitionDate: DateTime(2022, 8, 14),
         estimatedUsefulLifeYears: 8,
         state: AssetState.activo,
         observations: 'Uso diario',
-        program: 'Ingenieria',
+        program: 'Administracion',
       ),
       performedBy: 'system',
     );
@@ -421,6 +826,31 @@ class AppState extends ChangeNotifier {
   }
 
   bool canManageUsers() => hasRole(UserRole.administrador);
+
+  bool canManageAssets() =>
+      hasRole(UserRole.administrador) || hasRole(UserRole.auxiliarInventario);
+
+  void reportMissingAsset({
+    required String scannedCode,
+    required String notes,
+  }) {
+    final notifId = 'NOTIF-${DateTime.now().millisecondsSinceEpoch}';
+    notifications.add(
+      AppNotification(
+        id: notifId,
+        type: 'missing_asset',
+        title: 'Activo no encontrado: $scannedCode',
+        body:
+            'El usuario ${currentUser?.fullName ?? currentUser?.username} reportó que el activo con código "$scannedCode" no existe físicamente.'
+            '${notes.isNotEmpty ? '\nNota: $notes' : ''}',
+        createdAt: DateTime.now(),
+        fromUser: currentUser?.username ?? '',
+        relatedId: scannedCode,
+        toRoles: [UserRole.administrador.name, UserRole.direccionAdminFin.name],
+      ),
+    );
+    notifyListeners();
+  }
 
   bool canApproveDisposals() =>
       hasRole(UserRole.direccionAdminFin) || hasRole(UserRole.responsableArea);
@@ -519,13 +949,25 @@ class AppState extends ChangeNotifier {
     AppUser user, {
     required String fullName,
     required String email,
+    required String area,
     required List<UserRole> roles,
     required bool isActive,
   }) {
     user.fullName = fullName;
     user.email = email;
+    user.area = area;
     user.roles = roles;
     user.isActive = isActive;
+    notifyListeners();
+  }
+
+  void deleteUser(AppUser user) {
+    users.remove(user);
+    notifyListeners();
+  }
+
+  void deleteAsset(Asset asset) {
+    assets.remove(asset);
     notifyListeners();
   }
 
@@ -665,9 +1107,10 @@ class AppState extends ChangeNotifier {
     required MaintenanceType type,
     required String description,
   }) {
+    final id = 'MNT-${maintenanceRequests.length + 1}';
     maintenanceRequests.add(
       MaintenanceRequest(
-        id: 'MNT-${maintenanceRequests.length + 1}',
+        id: id,
         assetCode: assetCode,
         type: type,
         description: description,
@@ -675,11 +1118,59 @@ class AppState extends ChangeNotifier {
         createdAt: DateTime.now(),
       ),
     );
+
+    // Generar notificacion para administradores
+    final user = currentUser;
+    final asset = findAsset(assetCode);
+    notifications.add(
+      AppNotification(
+        id: 'NOTIF-${notifications.length + 1}',
+        type: 'maintenance',
+        title: 'Solicitud de mantenimiento',
+        body:
+            'Activo: ${asset?.name ?? assetCode}\n'
+            'Tipo: ${type.name}\n'
+            'Descripcion: $description\n'
+            'Solicitante: ${user?.fullName ?? 'Desconocido'} '
+            '(${user?.area ?? ''}) · ${user?.email ?? ''}',
+        createdAt: DateTime.now(),
+        fromUser: user?.username ?? 'system',
+        relatedId: id,
+      ),
+    );
     notifyListeners();
   }
 
   void closeMaintenance(MaintenanceRequest req) {
     req.closed = true;
+    notifyListeners();
+  }
+
+  void markNotificationRead(AppNotification n) {
+    n.read = true;
+    notifyListeners();
+  }
+
+  void markAllNotificationsRead() {
+    for (final n in myNotifications) {
+      n.read = true;
+    }
+    notifyListeners();
+  }
+
+  void approveNotification(AppNotification n) {
+    n.status = NotificationStatus.aprobada;
+    n.read = true;
+    if (n.type == 'maintenance') {
+      // ya queda registrada la aprobacion en la notificacion misma
+      maintenanceRequests.where((r) => r.id == n.relatedId).firstOrNull;
+    }
+    notifyListeners();
+  }
+
+  void denyNotification(AppNotification n) {
+    n.status = NotificationStatus.denegada;
+    n.read = true;
     notifyListeners();
   }
 
@@ -1000,33 +1491,30 @@ class _LoginPageState extends State<LoginPage> {
     final locked = _authError == _AuthError.locked;
 
     return Scaffold(
+      backgroundColor: const Color(0xFFF0F7F4),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 440),
           child: Card(
             margin: const EdgeInsets.all(16),
+            elevation: 4,
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.all(Radius.circular(16)),
+            ),
             child: Padding(
-              padding: const EdgeInsets.all(24),
+              padding: const EdgeInsets.all(28),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.lock_outline, size: 28),
-                      const SizedBox(width: 10),
-                      const Expanded(
-                        child: Text(
-                          'Sistema de Inventario Institucional',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ],
+                  Center(
+                    child: Image.asset(
+                      'assets/logo-ucp.png',
+                      height: 90,
+                      fit: BoxFit.contain,
+                    ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 20),
 
                   // RF01: mecanismo de autenticacion configurable
                   DropdownButtonFormField<AuthMode>(
@@ -1235,86 +1723,153 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    final pages = <Widget>[
-      DashboardPage(state: widget.state),
-      UsersPage(state: widget.state),
-      AssetsPage(state: widget.state),
-      InventoryPage(state: widget.state),
-      MaintenancePage(state: widget.state),
-      ReportsPage(state: widget.state),
-      IntegrationPage(state: widget.state),
-    ];
+    final s = widget.state;
 
-    // RF02: construye los chips de roles del usuario autenticado
-    final roleChips = (widget.state.currentUser?.roles ?? <UserRole>[])
-        .map(
-          (r) => Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 3),
-            child: Chip(
-              label: Text(r.label, style: const TextStyle(fontSize: 11)),
-              padding: EdgeInsets.zero,
-              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
+    // Definicion de tabs con control de acceso por rol
+    final allTabs =
+        <
+          ({
+            Widget page,
+            Icon icon,
+            Icon selectedIcon,
+            String label,
+            bool allowed,
+          })
+        >[
+          (
+            page: DashboardPage(state: s),
+            icon: const Icon(Icons.dashboard_outlined),
+            selectedIcon: const Icon(Icons.dashboard),
+            label: 'Inicio',
+            allowed: true,
           ),
-        )
-        .toList();
+          (
+            page: UsersPage(state: s),
+            icon: const Icon(Icons.people_outline),
+            selectedIcon: const Icon(Icons.people),
+            label: 'Usuarios',
+            allowed: s.hasRole(UserRole.administrador),
+          ),
+          (
+            page: AssetsPage(state: s),
+            icon: const Icon(Icons.inventory_2_outlined),
+            selectedIcon: const Icon(Icons.inventory_2),
+            label: 'Activos',
+            allowed:
+                s.hasRole(UserRole.auxiliarInventario) ||
+                s.hasRole(UserRole.administrador) ||
+                s.hasRole(UserRole.responsableArea) ||
+                s.hasRole(UserRole.soporteTI) ||
+                s.hasRole(UserRole.auditor) ||
+                s.hasRole(UserRole.direccionAdminFin),
+          ),
+          (
+            page: InventoryPage(state: s),
+            icon: const Icon(Icons.fact_check_outlined),
+            selectedIcon: const Icon(Icons.fact_check),
+            label: 'Inventario',
+            allowed:
+                s.hasRole(UserRole.auxiliarInventario) ||
+                s.hasRole(UserRole.administrador) ||
+                s.hasRole(UserRole.auditor),
+          ),
+          (
+            page: MaintenancePage(state: s),
+            icon: const Icon(Icons.build_outlined),
+            selectedIcon: const Icon(Icons.build),
+            label: 'Manto/Bajas',
+            allowed:
+                s.hasRole(UserRole.auxiliarInventario) ||
+                s.hasRole(UserRole.administrador) ||
+                s.hasRole(UserRole.responsableArea) ||
+                s.hasRole(UserRole.direccionAdminFin),
+          ),
+          (
+            page: ReportsPage(state: s),
+            icon: const Icon(Icons.assessment_outlined),
+            selectedIcon: const Icon(Icons.assessment),
+            label: 'Reportes',
+            allowed:
+                s.hasRole(UserRole.administrador) ||
+                s.hasRole(UserRole.auditor) ||
+                s.hasRole(UserRole.direccionAdminFin) ||
+                s.hasRole(UserRole.responsableArea),
+          ),
+          (
+            page: IntegrationPage(state: s),
+            icon: const Icon(Icons.storage_outlined),
+            selectedIcon: const Icon(Icons.storage),
+            label: 'PostgreSQL',
+            allowed:
+                s.hasRole(UserRole.administrador) ||
+                s.hasRole(UserRole.soporteTI),
+          ),
+          (
+            page: NotificationsPage(state: s),
+            icon: const Icon(Icons.notifications_outlined),
+            selectedIcon: const Icon(Icons.notifications),
+            label: 'Avisos',
+            allowed: true,
+          ),
+        ];
+
+    final tabs = allTabs.where((t) => t.allowed).toList();
+    final safeIndex = _tabIndex.clamp(0, tabs.length - 1);
+    final unread = s.unreadCount;
 
     return Scaffold(
       appBar: AppBar(
-        title: Row(
+        leading: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Image.asset('assets/isologo-ucp.png', fit: BoxFit.contain),
+        ),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Text(widget.state.currentUser?.fullName ?? ''),
-            const SizedBox(width: 10),
-            ...roleChips,
+            Text(
+              widget.state.currentUser?.fullName ?? '',
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+            ),
+            if ((widget.state.currentUser?.roles ?? []).isNotEmpty)
+              Text(
+                (widget.state.currentUser?.roles ?? [])
+                    .map((r) => r.label)
+                    .join(' · '),
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.normal,
+                ),
+              ),
           ],
         ),
         actions: [
-          TextButton(
-            onPressed: widget.state.logout,
-            child: const Text('Cerrar sesion'),
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: TextButton.icon(
+              onPressed: widget.state.logout,
+              icon: const Icon(Icons.logout, size: 18),
+              label: const Text('Salir'),
+            ),
           ),
         ],
       ),
-      body: Row(
-        children: [
-          NavigationRail(
-            selectedIndex: _tabIndex,
-            onDestinationSelected: (i) => setState(() => _tabIndex = i),
-            labelType: NavigationRailLabelType.all,
-            destinations: const [
-              NavigationRailDestination(
-                icon: Icon(Icons.dashboard),
-                label: Text('Inicio'),
+      body: tabs[safeIndex].page,
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: safeIndex,
+        onDestinationSelected: (i) => setState(() => _tabIndex = i),
+        labelBehavior: NavigationDestinationLabelBehavior.onlyShowSelected,
+        destinations: tabs
+            .map(
+              (t) => NavigationDestination(
+                icon: t.label == 'Avisos' && unread > 0
+                    ? Badge(label: Text('$unread'), child: t.icon)
+                    : t.icon,
+                selectedIcon: t.selectedIcon,
+                label: t.label,
               ),
-              NavigationRailDestination(
-                icon: Icon(Icons.people),
-                label: Text('Usuarios'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.inventory_2),
-                label: Text('Activos'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.fact_check),
-                label: Text('Inventario'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.build),
-                label: Text('Manto/Bajas'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.assessment),
-                label: Text('Reportes'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.storage),
-                label: Text('PostgreSQL'),
-              ),
-            ],
-          ),
-          const VerticalDivider(width: 1),
-          Expanded(child: pages[_tabIndex]),
-        ],
+            )
+            .toList(),
       ),
     );
   }
@@ -1330,52 +1885,161 @@ class DashboardPage extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
+        Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: Text(
+            'Panel de Control',
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+          ),
+        ),
+        GridView.count(
+          crossAxisCount: 2,
+          crossAxisSpacing: 12,
+          mainAxisSpacing: 12,
+          childAspectRatio: 1.9,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
           children: [
-            _metricCard('Usuarios', state.users.length.toString()),
-            _metricCard('Activos', state.assets.length.toString()),
-            _metricCard('Jornadas', state.inventorySessions.length.toString()),
+            _metricCard(
+              'Activos',
+              state.assets.length.toString(),
+              Icons.inventory_2_outlined,
+              const Color(0xFF00804E),
+            ),
             _metricCard(
               'Mantenimientos',
               state.maintenanceRequests.length.toString(),
+              Icons.build_outlined,
+              const Color(0xFFE65100),
             ),
-            _metricCard('Bajas', state.disposalRequests.length.toString()),
+            _metricCard(
+              'Bajas',
+              state.disposalRequests.length.toString(),
+              Icons.delete_sweep_outlined,
+              const Color(0xFFC62828),
+            ),
+            _metricCard(
+              'Jornadas',
+              state.inventorySessions.length.toString(),
+              Icons.fact_check_outlined,
+              const Color(0xFF6A1B9A),
+            ),
+            _metricCard(
+              'Usuarios',
+              state.users.length.toString(),
+              Icons.people_alt_outlined,
+              const Color(0xFF1565C0),
+            ),
           ],
         ),
-        const SizedBox(height: 16),
-        Text(
-          'Roles del usuario actual: ${state.currentUser?.roles.map((r) => r.label).join(', ') ?? ''}',
-        ),
-        const SizedBox(height: 8),
-        Text(
-          'Ultima sesion: ${state.currentUser?.lastSession != null ? DateFormat('yyyy-MM-dd HH:mm').format(state.currentUser!.lastSession!) : 'N/A'}',
+        const SizedBox(height: 20),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Sesion actual',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black54,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.badge_outlined,
+                      size: 18,
+                      color: Colors.black45,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        state.currentUser?.roles
+                                .map((r) => r.label)
+                                .join(' · ') ??
+                            '',
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.access_time_outlined,
+                      size: 18,
+                      color: Colors.black45,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      state.currentUser?.lastSession != null
+                          ? DateFormat(
+                              'yyyy-MM-dd HH:mm',
+                            ).format(state.currentUser!.lastSession!)
+                          : 'Primera sesion',
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ),
       ],
     );
   }
 
-  Widget _metricCard(String title, String value) {
-    return SizedBox(
-      width: 180,
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title),
-              const SizedBox(height: 8),
-              Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                ),
+  Widget _metricCard(String title, String value, IconData icon, Color color) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
               ),
-            ],
-          ),
+              child: Icon(icon, color: color, size: 20),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    value,
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: color,
+                      height: 1.1,
+                    ),
+                  ),
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Colors.black54,
+                      height: 1.2,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -1444,9 +2108,49 @@ class _UsersPageState extends State<UsersPage> {
                     subtitle: Text(
                       'Roles: ${user.roles.map((r) => r.label).join(', ')}\nActivo: ${user.isActive ? 'Si' : 'No'} | Ultima sesion: ${user.lastSession != null ? DateFormat('yyyy-MM-dd HH:mm').format(user.lastSession!) : 'N/A'}',
                     ),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.edit),
-                      onPressed: () => _editUserDialog(context, user),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.edit_outlined),
+                          tooltip: 'Editar',
+                          onPressed: () => _editUserDialog(context, user),
+                        ),
+                        IconButton(
+                          icon: const Icon(
+                            Icons.delete_outline,
+                            color: Colors.red,
+                          ),
+                          tooltip: 'Eliminar',
+                          onPressed: () async {
+                            final confirm = await showDialog<bool>(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                title: const Text('Eliminar usuario'),
+                                content: Text(
+                                  'Eliminar a ${user.fullName} (${user.username})?',
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(ctx, false),
+                                    child: const Text('Cancelar'),
+                                  ),
+                                  FilledButton(
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: Colors.red,
+                                    ),
+                                    onPressed: () => Navigator.pop(ctx, true),
+                                    child: const Text('Eliminar'),
+                                  ),
+                                ],
+                              ),
+                            );
+                            if (confirm == true) {
+                              widget.state.deleteUser(user);
+                            }
+                          },
+                        ),
+                      ],
                     ),
                     isThreeLine: true,
                   ),
@@ -1463,38 +2167,89 @@ class _UsersPageState extends State<UsersPage> {
     final username = TextEditingController();
     final fullName = TextEditingController();
     final email = TextEditingController();
+    final area = TextEditingController();
     final password = TextEditingController();
     final selectedRoles = <UserRole>{UserRole.auxiliarInventario};
 
     await showDialog<void>(
       context: context,
-      builder: (context) {
+      builder: (dialogCtx) {
+        String? errorMsg;
         return StatefulBuilder(
-          builder: (context, setLocal) {
+          builder: (dialogCtx, setLocal) {
             return AlertDialog(
               title: const Text('Crear usuario'),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (errorMsg != null)
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          border: Border.all(color: Colors.red.shade300),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.error_outline,
+                              color: Colors.red,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                errorMsg!,
+                                style: TextStyle(
+                                  color: Colors.red.shade800,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     TextField(
                       controller: username,
-                      decoration: const InputDecoration(labelText: 'Username'),
-                    ),
-                    TextField(
-                      controller: fullName,
-                      decoration: const InputDecoration(labelText: 'Nombre'),
-                    ),
-                    TextField(
-                      controller: email,
                       decoration: const InputDecoration(
-                        labelText: 'Correo institucional',
+                        labelText: 'Username *',
                       ),
                     ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: fullName,
+                      decoration: const InputDecoration(
+                        labelText: 'Nombre completo *',
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: email,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: const InputDecoration(
+                        labelText: 'Correo institucional *',
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: area,
+                      decoration: const InputDecoration(
+                        labelText: 'Área / Dependencia',
+                      ),
+                    ),
+                    const SizedBox(height: 8),
                     TextField(
                       controller: password,
+                      obscureText: true,
                       decoration: const InputDecoration(
-                        labelText: 'Clave inicial',
+                        labelText: 'Clave inicial * (min. 6 car.)',
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -1511,6 +2266,7 @@ class _UsersPageState extends State<UsersPage> {
                           });
                         },
                         title: Text(r.label),
+                        dense: true,
                       ),
                     ),
                   ],
@@ -1518,22 +2274,60 @@ class _UsersPageState extends State<UsersPage> {
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: () => Navigator.pop(dialogCtx),
                   child: const Text('Cancelar'),
                 ),
                 FilledButton(
                   onPressed: () {
+                    final u = username.text.trim();
+                    final f = fullName.text.trim();
+                    final e = email.text.trim();
+                    final p = password.text.trim();
+                    if (u.isEmpty || f.isEmpty || e.isEmpty || p.isEmpty) {
+                      setLocal(
+                        () => errorMsg =
+                            'Username, nombre, correo y clave son obligatorios.',
+                      );
+                      return;
+                    }
+                    final emailRegex = RegExp(r'^[\w.+-]+@[\w-]+\.[\w.]+$');
+                    if (!emailRegex.hasMatch(e)) {
+                      setLocal(
+                        () =>
+                            errorMsg = 'El correo no tiene un formato valido.',
+                      );
+                      return;
+                    }
+                    if (p.length < 6) {
+                      setLocal(
+                        () => errorMsg =
+                            'La clave debe tener al menos 6 caracteres.',
+                      );
+                      return;
+                    }
+                    if (widget.state.users.any((usr) => usr.username == u)) {
+                      setLocal(
+                        () =>
+                            errorMsg = 'Ya existe un usuario con ese username.',
+                      );
+                      return;
+                    }
+                    if (selectedRoles.isEmpty) {
+                      setLocal(() => errorMsg = 'Selecciona al menos un rol.');
+                      return;
+                    }
                     widget.state.createUser(
                       AppUser(
                         id: 'U${widget.state.users.length + 1}'.padLeft(4, '0'),
-                        username: username.text,
-                        fullName: fullName.text,
-                        email: email.text,
-                        password: password.text,
+                        username: u,
+                        fullName: f,
+                        email: e,
+                        area: area.text.trim(),
+                        password: p,
                         roles: selectedRoles.toList(),
                       ),
                     );
-                    Navigator.pop(context);
+                    Navigator.pop(dialogCtx);
                   },
                   child: const Text('Guardar'),
                 ),
@@ -1548,27 +2342,71 @@ class _UsersPageState extends State<UsersPage> {
   Future<void> _editUserDialog(BuildContext context, AppUser user) async {
     final fullName = TextEditingController(text: user.fullName);
     final email = TextEditingController(text: user.email);
+    final area = TextEditingController(text: user.area);
     bool isActive = user.isActive;
     final selectedRoles = <UserRole>{...user.roles};
 
     await showDialog<void>(
       context: context,
-      builder: (context) {
+      builder: (dialogCtx) {
+        String? errorMsg;
         return StatefulBuilder(
-          builder: (context, setLocal) {
+          builder: (dialogCtx, setLocal) {
             return AlertDialog(
               title: Text('Editar ${user.username}'),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (errorMsg != null)
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          border: Border.all(color: Colors.red.shade300),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.error_outline,
+                              color: Colors.red,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                errorMsg!,
+                                style: TextStyle(
+                                  color: Colors.red.shade800,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     TextField(
                       controller: fullName,
-                      decoration: const InputDecoration(labelText: 'Nombre'),
+                      decoration: const InputDecoration(labelText: 'Nombre *'),
                     ),
+                    const SizedBox(height: 8),
                     TextField(
                       controller: email,
-                      decoration: const InputDecoration(labelText: 'Correo'),
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: const InputDecoration(labelText: 'Correo *'),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: area,
+                      decoration: const InputDecoration(
+                        labelText: 'Área / Dependencia',
+                      ),
                     ),
                     SwitchListTile(
                       title: const Text('Activo'),
@@ -1588,6 +2426,7 @@ class _UsersPageState extends State<UsersPage> {
                           });
                         },
                         title: Text(r.label),
+                        dense: true,
                       ),
                     ),
                   ],
@@ -1595,19 +2434,41 @@ class _UsersPageState extends State<UsersPage> {
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: () => Navigator.pop(dialogCtx),
                   child: const Text('Cancelar'),
                 ),
                 FilledButton(
                   onPressed: () {
+                    final f = fullName.text.trim();
+                    final e = email.text.trim();
+                    if (f.isEmpty || e.isEmpty) {
+                      setLocal(
+                        () => errorMsg =
+                            'El nombre y el correo son obligatorios.',
+                      );
+                      return;
+                    }
+                    final emailRegex = RegExp(r'^[\w.+-]+@[\w-]+\.[\w.]+$');
+                    if (!emailRegex.hasMatch(e)) {
+                      setLocal(
+                        () =>
+                            errorMsg = 'El correo no tiene un formato valido.',
+                      );
+                      return;
+                    }
+                    if (selectedRoles.isEmpty) {
+                      setLocal(() => errorMsg = 'Selecciona al menos un rol.');
+                      return;
+                    }
                     widget.state.updateUser(
                       user,
-                      fullName: fullName.text,
-                      email: email.text,
+                      fullName: f,
+                      email: e,
+                      area: area.text.trim(),
                       roles: selectedRoles.toList(),
                       isActive: isActive,
                     );
-                    Navigator.pop(context);
+                    Navigator.pop(dialogCtx);
                   },
                   child: const Text('Actualizar'),
                 ),
@@ -1665,12 +2526,13 @@ class _AssetsPageState extends State<AssetsPage> {
                 ),
               ),
               const SizedBox(width: 12),
-              FilledButton.icon(
-                onPressed: () => _createAssetDialog(context),
-                icon: const Icon(Icons.add_box),
-                label: const Text('Registrar activo'),
-              ),
-              const SizedBox(width: 8),
+              if (widget.state.canManageAssets())
+                FilledButton.icon(
+                  onPressed: () => _createAssetDialog(context),
+                  icon: const Icon(Icons.add_box),
+                  label: const Text('Registrar activo'),
+                ),
+              if (widget.state.canManageAssets()) const SizedBox(width: 8),
               OutlinedButton.icon(
                 onPressed: () => _scanBarcode(context),
                 icon: const Icon(Icons.qr_code_scanner),
@@ -1700,14 +2562,52 @@ class _AssetsPageState extends State<AssetsPage> {
                       Wrap(
                         spacing: 8,
                         children: [
-                          OutlinedButton(
-                            onPressed: () => _editAssetDialog(context, asset),
-                            child: const Text('Editar activo'),
-                          ),
+                          if (widget.state.canManageAssets())
+                            OutlinedButton(
+                              onPressed: () => _editAssetDialog(context, asset),
+                              child: const Text('Editar activo'),
+                            ),
                           OutlinedButton(
                             onPressed: () => _showHistory(context, asset),
                             child: const Text('Ver historial'),
                           ),
+                          if (widget.state.canManageAssets())
+                            OutlinedButton(
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.red,
+                                side: const BorderSide(color: Colors.red),
+                              ),
+                              onPressed: () async {
+                                final confirm = await showDialog<bool>(
+                                  context: context,
+                                  builder: (ctx) => AlertDialog(
+                                    title: const Text('Eliminar activo'),
+                                    content: Text(
+                                      'Eliminar el activo ${asset.code} - ${asset.name}?\nEsta accion no se puede deshacer.',
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.pop(ctx, false),
+                                        child: const Text('Cancelar'),
+                                      ),
+                                      FilledButton(
+                                        style: FilledButton.styleFrom(
+                                          backgroundColor: Colors.red,
+                                        ),
+                                        onPressed: () =>
+                                            Navigator.pop(ctx, true),
+                                        child: const Text('Eliminar'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                                if (confirm == true) {
+                                  widget.state.deleteAsset(asset);
+                                }
+                              },
+                              child: const Text('Eliminar'),
+                            ),
                         ],
                       ),
                       const SizedBox(height: 8),
@@ -1723,12 +2623,12 @@ class _AssetsPageState extends State<AssetsPage> {
   }
 
   Future<void> _createAssetDialog(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
     final code = TextEditingController();
     final name = TextEditingController();
     final category = TextEditingController();
     final subcategory = TextEditingController();
     final location = TextEditingController();
-    final responsible = TextEditingController();
     final dependency = TextEditingController();
     final costCenter = TextEditingController();
     final value = TextEditingController();
@@ -1738,66 +2638,156 @@ class _AssetsPageState extends State<AssetsPage> {
 
     await showDialog<void>(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Registrar activo (manual)'),
-          content: SizedBox(
-            width: 450,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _field(code, 'Codigo interno'),
-                  _field(name, 'Nombre / descripcion'),
-                  _field(category, 'Categoria'),
-                  _field(subcategory, 'Subcategoria'),
-                  _field(location, 'Ubicacion fisica'),
-                  _field(responsible, 'Responsable'),
-                  _field(dependency, 'Dependencia'),
-                  _field(costCenter, 'Centro de costo'),
-                  _field(program, 'Programa academico'),
-                  _field(value, 'Valor adquisicion'),
-                  _field(usefulLife, 'Vida util (anios)'),
-                  _field(observations, 'Observaciones'),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancelar'),
-            ),
-            FilledButton(
-              onPressed: () {
-                widget.state.addAsset(
-                  Asset(
-                    code: code.text.trim(),
-                    name: name.text.trim(),
-                    category: category.text.trim(),
-                    subcategory: subcategory.text.trim(),
-                    physicalLocation: location.text.trim(),
-                    responsible: responsible.text.trim(),
-                    dependency: dependency.text.trim(),
-                    costCenter: costCenter.text.trim(),
-                    acquisitionValue: double.tryParse(value.text.trim()) ?? 0,
-                    acquisitionDate: DateTime.now(),
-                    estimatedUsefulLifeYears:
-                        int.tryParse(usefulLife.text.trim()) ?? 5,
-                    state: AssetState.activo,
-                    observations: observations.text.trim(),
-                    program: program.text.trim(),
+      builder: (dialogContext) {
+        String? errorMsg;
+        AppUser? selectedResponsible;
+        return StatefulBuilder(
+          builder: (dialogContext, setLocal) {
+            return AlertDialog(
+              title: const Text('Registrar activo (manual)'),
+              content: SizedBox(
+                width: 450,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (errorMsg != null)
+                        Container(
+                          width: double.infinity,
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade50,
+                            border: Border.all(color: Colors.red.shade300),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.error_outline,
+                                color: Colors.red,
+                                size: 18,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  errorMsg!,
+                                  style: TextStyle(
+                                    color: Colors.red.shade800,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      _field(code, 'Codigo interno'),
+                      _field(name, 'Nombre / descripcion'),
+                      _field(category, 'Categoria'),
+                      _field(subcategory, 'Subcategoria'),
+                      const SizedBox(height: 8),
+                      DropdownButtonFormField<AppUser>(
+                        value: selectedResponsible,
+                        decoration: const InputDecoration(
+                          labelText: 'Responsable *',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: widget.state.users
+                            .where((u) => u.isActive)
+                            .map(
+                              (u) => DropdownMenuItem<AppUser>(
+                                value: u,
+                                child: Text(
+                                  '${u.fullName}${u.area.isNotEmpty ? ' — ${u.area}' : ''}',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (u) {
+                          if (u == null) return;
+                          setLocal(() {
+                            selectedResponsible = u;
+                            dependency.text = u.area;
+                            location.text = u.area;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      _field(dependency, 'Área / Dependencia'),
+                      _field(location, 'Ubicación física'),
+                      _field(costCenter, 'Centro de costo'),
+                      _field(program, 'Programa academico'),
+                      _field(value, 'Valor adquisicion'),
+                      _field(usefulLife, 'Vida util (anios)'),
+                      _field(observations, 'Observaciones'),
+                    ],
                   ),
-                  performedBy: widget.state.currentUser?.username ?? 'system',
-                );
-                Navigator.pop(context);
-              },
-              child: const Text('Guardar'),
-            ),
-          ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Cancelar'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    if (code.text.trim().isEmpty || name.text.trim().isEmpty) {
+                      setLocal(
+                        () => errorMsg =
+                            'El código y el nombre son obligatorios.',
+                      );
+                      return;
+                    }
+                    if (selectedResponsible == null) {
+                      setLocal(
+                        () => errorMsg = 'Debes seleccionar un responsable.',
+                      );
+                      return;
+                    }
+                    if (widget.state.findAsset(code.text.trim()) != null) {
+                      setLocal(
+                        () => errorMsg = 'Ya existe un activo con ese código.',
+                      );
+                      return;
+                    }
+                    widget.state.addAsset(
+                      Asset(
+                        code: code.text.trim(),
+                        name: name.text.trim(),
+                        category: category.text.trim(),
+                        subcategory: subcategory.text.trim(),
+                        physicalLocation: location.text.trim(),
+                        responsible: selectedResponsible!.fullName,
+                        responsibleId: selectedResponsible!.id,
+                        dependency: dependency.text.trim(),
+                        costCenter: costCenter.text.trim(),
+                        acquisitionValue:
+                            double.tryParse(value.text.trim()) ?? 0,
+                        acquisitionDate: DateTime.now(),
+                        estimatedUsefulLifeYears:
+                            int.tryParse(usefulLife.text.trim()) ?? 5,
+                        state: AssetState.activo,
+                        observations: observations.text.trim(),
+                        program: program.text.trim(),
+                      ),
+                      performedBy:
+                          widget.state.currentUser?.username ?? 'system',
+                    );
+                    Navigator.pop(dialogContext);
+                  },
+                  child: const Text('Guardar'),
+                ),
+              ],
+            );
+          },
         );
       },
     );
+    messenger.clearSnackBars();
   }
 
   Future<void> _editAssetDialog(BuildContext context, Asset asset) async {
@@ -1959,13 +2949,67 @@ class _AssetsPageState extends State<AssetsPage> {
 
     final asset = widget.state.findAsset(scannedCode!);
     if (asset == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Activo no existe: $scannedCode. Debe registrarse manualmente.',
+      if (!context.mounted) return;
+      if (widget.state.canManageAssets()) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Activo no existe: $scannedCode. Debe registrarse manualmente.',
+            ),
           ),
-        ),
-      );
+        );
+      } else {
+        // Roles de solo lectura: ofrecer reportar activo inexistente
+        final notesCtrl = TextEditingController();
+        final confirm = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Activo no encontrado'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'El código "$scannedCode" no está registrado en el sistema.',
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: notesCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Observaciones (opcional)',
+                    border: OutlineInputBorder(),
+                  ),
+                  maxLines: 3,
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancelar'),
+              ),
+              FilledButton.icon(
+                icon: const Icon(Icons.report_outlined),
+                onPressed: () => Navigator.pop(ctx, true),
+                label: const Text('Reportar al administrador'),
+              ),
+            ],
+          ),
+        );
+        if (confirm == true) {
+          widget.state.reportMissingAsset(
+            scannedCode: scannedCode!,
+            notes: notesCtrl.text.trim(),
+          );
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Reporte enviado al administrador.'),
+              ),
+            );
+          }
+        }
+      }
       return;
     }
 
@@ -2291,119 +3335,152 @@ class MaintenancePage extends StatefulWidget {
 class _MaintenancePageState extends State<MaintenancePage> {
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Row(
+    return DefaultTabController(
+      length: 2,
+      child: Column(
         children: [
+          TabBar(
+            tabs: const [
+              Tab(icon: Icon(Icons.build_outlined), text: 'Mantenimientos'),
+              Tab(
+                icon: Icon(Icons.delete_sweep_outlined),
+                text: 'Bajas de activos',
+              ),
+            ],
+          ),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: TabBarView(
               children: [
-                Row(
-                  children: [
-                    const Text(
-                      'Mantenimientos',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    FilledButton(
-                      onPressed: () => _newMaintenanceDialog(context),
-                      child: const Text('Solicitar'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: ListView(
-                    children: widget.state.maintenanceRequests
-                        .map(
-                          (m) => Card(
-                            child: ListTile(
-                              title: Text(
-                                '${m.id} | ${m.assetCode} | ${m.type.name}',
-                              ),
-                              subtitle: Text(
-                                '${m.description}\nEstado: ${m.closed ? 'Cerrado' : 'Abierto'}',
-                              ),
-                              trailing: m.closed
-                                  ? null
-                                  : OutlinedButton(
-                                      onPressed: () =>
-                                          widget.state.closeMaintenance(m),
-                                      child: const Text('Cerrar'),
-                                    ),
-                              isThreeLine: true,
-                            ),
+                // ── Tab 1: Mantenimientos ──────────────────────────
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            'Mantenimientos',
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(fontWeight: FontWeight.bold),
                           ),
-                        )
-                        .toList(),
+                          const SizedBox(width: 12),
+                          FilledButton.icon(
+                            onPressed: () => _newMaintenanceDialog(context),
+                            icon: const Icon(Icons.add, size: 18),
+                            label: const Text('Solicitar'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Expanded(
+                        child: ListView(
+                          children: widget.state.maintenanceRequests
+                              .map(
+                                (m) => Card(
+                                  child: ListTile(
+                                    leading: Icon(
+                                      m.closed
+                                          ? Icons.check_circle_outline
+                                          : Icons.build_circle_outlined,
+                                      color: m.closed
+                                          ? Colors.green
+                                          : Colors.orange,
+                                    ),
+                                    title: Text(
+                                      '${m.assetCode} · ${m.type.name}',
+                                    ),
+                                    subtitle: Text(
+                                      '${m.description}\n${m.id} · ${m.closed ? 'Cerrado' : 'Abierto'}',
+                                    ),
+                                    trailing: m.closed
+                                        ? null
+                                        : OutlinedButton(
+                                            onPressed: () => widget.state
+                                                .closeMaintenance(m),
+                                            child: const Text('Cerrar'),
+                                          ),
+                                    isThreeLine: true,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
-            ),
-          ),
-          const VerticalDivider(),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Text(
-                      'Bajas de activos',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    FilledButton(
-                      onPressed: () => _newDisposalDialog(context),
-                      child: const Text('Solicitar baja'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: ListView(
-                    children: widget.state.disposalRequests
-                        .map(
-                          (d) => Card(
-                            child: ListTile(
-                              title: Text(
-                                '${d.id} | ${d.assetCode} | ${d.status}',
-                              ),
-                              subtitle: Text('${d.cause} - ${d.justification}'),
-                              trailing: Wrap(
-                                spacing: 8,
-                                children: [
-                                  if (!d.approvedByDependency &&
-                                      widget.state.hasRole(
-                                        UserRole.responsableArea,
-                                      ))
-                                    OutlinedButton(
-                                      onPressed: () => widget.state
-                                          .approveDisposalByDependency(d),
-                                      child: const Text('Aprueba Dependencia'),
-                                    ),
-                                  if (!d.approvedByDAF &&
-                                      widget.state.hasRole(
-                                        UserRole.direccionAdminFin,
-                                      ))
-                                    OutlinedButton(
-                                      onPressed: () =>
-                                          widget.state.approveDisposalByDAF(d),
-                                      child: const Text('Aprueba DAF'),
-                                    ),
-                                ],
-                              ),
-                            ),
+                // ── Tab 2: Bajas ────────────────────────────────────
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            'Bajas de activos',
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(fontWeight: FontWeight.bold),
                           ),
-                        )
-                        .toList(),
+                          const SizedBox(width: 12),
+                          FilledButton.icon(
+                            onPressed: () => _newDisposalDialog(context),
+                            icon: const Icon(Icons.add, size: 18),
+                            label: const Text('Solicitar baja'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Expanded(
+                        child: ListView(
+                          children: widget.state.disposalRequests
+                              .map(
+                                (d) => Card(
+                                  child: ListTile(
+                                    leading: Icon(
+                                      d.status == 'Aprobada'
+                                          ? Icons.check_circle_outline
+                                          : Icons.hourglass_top_outlined,
+                                      color: d.status == 'Aprobada'
+                                          ? Colors.green
+                                          : Colors.deepOrange,
+                                    ),
+                                    title: Text('${d.assetCode} · ${d.status}'),
+                                    subtitle: Text(
+                                      '${d.cause}\n${d.justification} · ${d.id}',
+                                    ),
+                                    isThreeLine: true,
+                                    trailing: Wrap(
+                                      spacing: 8,
+                                      children: [
+                                        if (!d.approvedByDependency &&
+                                            widget.state.hasRole(
+                                              UserRole.responsableArea,
+                                            ))
+                                          OutlinedButton(
+                                            onPressed: () => widget.state
+                                                .approveDisposalByDependency(d),
+                                            child: const Text(
+                                              'Aprueba Dependencia',
+                                            ),
+                                          ),
+                                        if (!d.approvedByDAF &&
+                                            widget.state.hasRole(
+                                              UserRole.direccionAdminFin,
+                                            ))
+                                          OutlinedButton(
+                                            onPressed: () => widget.state
+                                                .approveDisposalByDAF(d),
+                                            child: const Text('Aprueba DAF'),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -2420,20 +3497,55 @@ class _MaintenancePageState extends State<MaintenancePage> {
     MaintenanceType type = MaintenanceType.preventivo;
     await showDialog<void>(
       context: context,
-      builder: (context) {
+      builder: (dialogCtx) {
+        String? errorMsg;
         return StatefulBuilder(
-          builder: (context, setLocal) {
+          builder: (dialogCtx, setLocal) {
             return AlertDialog(
               title: const Text('Solicitud de mantenimiento'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (errorMsg != null)
+                    Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade50,
+                        border: Border.all(color: Colors.red.shade300),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.error_outline,
+                            color: Colors.red,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              errorMsg!,
+                              style: TextStyle(
+                                color: Colors.red.shade800,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   TextField(
                     controller: code,
                     decoration: const InputDecoration(
-                      labelText: 'Codigo activo',
+                      labelText: 'Codigo activo *',
                     ),
                   ),
+                  const SizedBox(height: 8),
                   DropdownButtonFormField<MaintenanceType>(
                     value: type,
                     items: MaintenanceType.values
@@ -2451,25 +3563,44 @@ class _MaintenancePageState extends State<MaintenancePage> {
                     },
                     decoration: const InputDecoration(labelText: 'Tipo'),
                   ),
+                  const SizedBox(height: 8),
                   TextField(
                     controller: description,
-                    decoration: const InputDecoration(labelText: 'Descripcion'),
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                      labelText: 'Descripcion *',
+                    ),
                   ),
                 ],
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: () => Navigator.pop(dialogCtx),
                   child: const Text('Cancelar'),
                 ),
                 FilledButton(
                   onPressed: () {
+                    final c = code.text.trim();
+                    final d = description.text.trim();
+                    if (c.isEmpty || d.isEmpty) {
+                      setLocal(
+                        () => errorMsg =
+                            'El codigo del activo y la descripcion son obligatorios.',
+                      );
+                      return;
+                    }
+                    if (widget.state.findAsset(c) == null) {
+                      setLocal(
+                        () => errorMsg = 'No existe un activo con ese codigo.',
+                      );
+                      return;
+                    }
                     widget.state.createMaintenance(
-                      assetCode: code.text.trim(),
+                      assetCode: c,
                       type: type,
-                      description: description.text.trim(),
+                      description: d,
                     );
-                    Navigator.pop(context);
+                    Navigator.pop(dialogCtx);
                   },
                   child: const Text('Crear'),
                 ),
@@ -2487,45 +3618,330 @@ class _MaintenancePageState extends State<MaintenancePage> {
     final justification = TextEditingController();
     await showDialog<void>(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Solicitud de baja'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: code,
-                decoration: const InputDecoration(labelText: 'Codigo activo'),
+      builder: (dialogCtx) {
+        String? errorMsg;
+        return StatefulBuilder(
+          builder: (dialogCtx, setLocal) {
+            return AlertDialog(
+              title: const Text('Solicitud de baja'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (errorMsg != null)
+                    Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade50,
+                        border: Border.all(color: Colors.red.shade300),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.error_outline,
+                            color: Colors.red,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              errorMsg!,
+                              style: TextStyle(
+                                color: Colors.red.shade800,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  TextField(
+                    controller: code,
+                    decoration: const InputDecoration(
+                      labelText: 'Codigo activo *',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: cause,
+                    decoration: const InputDecoration(labelText: 'Causal *'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: justification,
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                      labelText: 'Justificacion',
+                    ),
+                  ),
+                ],
               ),
-              TextField(
-                controller: cause,
-                decoration: const InputDecoration(labelText: 'Causal'),
-              ),
-              TextField(
-                controller: justification,
-                decoration: const InputDecoration(labelText: 'Justificacion'),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancelar'),
-            ),
-            FilledButton(
-              onPressed: () {
-                widget.state.createDisposal(
-                  assetCode: code.text.trim(),
-                  cause: cause.text.trim(),
-                  justification: justification.text.trim(),
-                );
-                Navigator.pop(context);
-              },
-              child: const Text('Solicitar'),
-            ),
-          ],
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogCtx),
+                  child: const Text('Cancelar'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    final c = code.text.trim();
+                    final ca = cause.text.trim();
+                    if (c.isEmpty || ca.isEmpty) {
+                      setLocal(
+                        () => errorMsg =
+                            'El codigo del activo y el causal son obligatorios.',
+                      );
+                      return;
+                    }
+                    if (widget.state.findAsset(c) == null) {
+                      setLocal(
+                        () => errorMsg = 'No existe un activo con ese codigo.',
+                      );
+                      return;
+                    }
+                    widget.state.createDisposal(
+                      assetCode: c,
+                      cause: ca,
+                      justification: justification.text.trim(),
+                    );
+                    Navigator.pop(dialogCtx);
+                  },
+                  child: const Text('Solicitar'),
+                ),
+              ],
+            );
+          },
         );
       },
+    );
+  }
+}
+
+// ── Pantalla de Notificaciones ────────────────────────────────────────────────
+
+class NotificationsPage extends StatelessWidget {
+  const NotificationsPage({super.key, required this.state});
+
+  final AppState state;
+
+  Color _statusColor(NotificationStatus s) {
+    switch (s) {
+      case NotificationStatus.aprobada:
+        return const Color(0xFF00804E);
+      case NotificationStatus.denegada:
+        return Colors.red;
+      case NotificationStatus.pendiente:
+        return Colors.orange;
+    }
+  }
+
+  IconData _statusIcon(NotificationStatus s) {
+    switch (s) {
+      case NotificationStatus.aprobada:
+        return Icons.check_circle_outline;
+      case NotificationStatus.denegada:
+        return Icons.cancel_outlined;
+      case NotificationStatus.pendiente:
+        return Icons.hourglass_top_outlined;
+    }
+  }
+
+  String _statusLabel(NotificationStatus s) {
+    switch (s) {
+      case NotificationStatus.aprobada:
+        return 'Aprobada';
+      case NotificationStatus.denegada:
+        return 'Denegada';
+      case NotificationStatus.pendiente:
+        return 'Pendiente';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final notifs = state.myNotifications;
+    final isAdmin = state.hasRole(UserRole.administrador);
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Text(
+                'Notificaciones',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+              ),
+              const Spacer(),
+              if (notifs.any((n) => !n.read))
+                TextButton.icon(
+                  icon: const Icon(Icons.done_all, size: 18),
+                  label: const Text('Marcar todo leído'),
+                  onPressed: state.markAllNotificationsRead,
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (notifs.isEmpty)
+            const Expanded(
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.notifications_none_outlined,
+                      size: 64,
+                      color: Colors.black26,
+                    ),
+                    SizedBox(height: 12),
+                    Text(
+                      'Sin notificaciones',
+                      style: TextStyle(color: Colors.black45),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            Expanded(
+              child: ListView.builder(
+                itemCount: notifs.length,
+                itemBuilder: (context, index) {
+                  final notif = notifs[index];
+                  final unread = !notif.read;
+                  return Card(
+                    color: unread ? const Color(0xFFF0F7F4) : null,
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                notif.type == 'maintenance'
+                                    ? Icons.build_outlined
+                                    : Icons.delete_sweep_outlined,
+                                size: 18,
+                                color: const Color(0xFF00804E),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  notif.title,
+                                  style: TextStyle(
+                                    fontWeight: unread
+                                        ? FontWeight.bold
+                                        : FontWeight.normal,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: _statusColor(
+                                    notif.status,
+                                  ).withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      _statusIcon(notif.status),
+                                      size: 13,
+                                      color: _statusColor(notif.status),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      _statusLabel(notif.status),
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: _statusColor(notif.status),
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            notif.body,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: Colors.black87,
+                              height: 1.5,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            DateFormat(
+                              'dd/MM/yyyy HH:mm',
+                            ).format(notif.createdAt),
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Colors.black45,
+                            ),
+                          ),
+                          // Acciones solo para administrador y notif pendiente
+                          if (isAdmin &&
+                              notif.status == NotificationStatus.pendiente)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 10),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  OutlinedButton.icon(
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: Colors.red,
+                                      side: const BorderSide(color: Colors.red),
+                                    ),
+                                    icon: const Icon(Icons.close, size: 16),
+                                    label: const Text('Denegar'),
+                                    onPressed: () =>
+                                        state.denyNotification(notif),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  FilledButton.icon(
+                                    icon: const Icon(Icons.check, size: 16),
+                                    label: const Text('Aprobar'),
+                                    onPressed: () =>
+                                        state.approveNotification(notif),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          if (!isAdmin && unread)
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton(
+                                onPressed: () =>
+                                    state.markNotificationRead(notif),
+                                child: const Text('Marcar como leída'),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
