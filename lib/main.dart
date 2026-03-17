@@ -882,7 +882,7 @@ class AppState extends ChangeNotifier {
   /// --dart-define=BACKEND_URL=http://10.0.2.2:3000  (Android emulador)
   static const _backendUrl = String.fromEnvironment(
     'BACKEND_URL',
-    defaultValue: 'http://localhost:3000',
+    defaultValue: 'http://192.168.31.120:3000',
   );
 
   /// Retorna null si el login fue exitoso.
@@ -912,15 +912,13 @@ class AppState extends ChangeNotifier {
       if (response.statusCode == 200) {
         final rawRoles = (body['roles'] as List).cast<String>();
         final appUser = AppUser(
-          id:       body['id'] as String,
+          id: body['id'] as String,
           username: body['username'] as String,
           fullName: body['fullName'] as String,
-          email:    body['email'] as String,
+          email: body['email'] as String,
           password: '', // no almacenamos la contraseña en cliente
-          area:     (body['area'] as String?) ?? '',
-          roles:    rawRoles
-              .map((r) => UserRole.values.byName(r))
-              .toList(),
+          area: (body['area'] as String?) ?? '',
+          roles: rawRoles.map((r) => UserRole.values.byName(r)).toList(),
           isActive: body['isActive'] as bool,
         );
         currentUser = appUser;
@@ -928,7 +926,7 @@ class AppState extends ChangeNotifier {
         return null;
       }
 
-      final code    = body['code'] as String? ?? 'INFO';
+      final code = body['code'] as String? ?? 'INFO';
       final message = body['message'] as String? ?? '';
       final seconds = body['seconds'] as int? ?? 900;
       final remaining = body['remaining'] as int? ?? 0;
