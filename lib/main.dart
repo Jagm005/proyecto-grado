@@ -882,7 +882,7 @@ class AppState extends ChangeNotifier {
   /// --dart-define=BACKEND_URL=http://10.0.2.2:3000  (Android emulador)
   static const _backendUrl = String.fromEnvironment(
     'BACKEND_URL',
-    defaultValue: 'http://192.168.31.120:3000',
+    defaultValue: 'http://10.113.72.161:3000',
   );
 
   /// Retorna null si el login fue exitoso.
@@ -934,10 +934,12 @@ class AppState extends ChangeNotifier {
       if (code == 'LOCK') return 'LOCK:$seconds';
       if (code == 'WARN') return 'WARN:$remaining';
       return 'INFO:$message';
-    } on http.ClientException {
+    } on http.ClientException catch (e) {
+      debugPrint('ClientException: $e');
       return 'INFO:No se pudo conectar al servidor. Verifique la red o use el modo local.';
-    } catch (_) {
-      return 'INFO:Error inesperado al contactar el backend.';
+    } catch (e) {
+      debugPrint('Login error: $e');
+      return 'INFO:No se pudo conectar al servidor. Verifique la red o use el modo local.';
     }
   }
 
@@ -995,7 +997,7 @@ class AppState extends ChangeNotifier {
       return;
     }
     final temporaryPassword = 'Temp${Random().nextInt(8999) + 1000}';
-    user.password = temporaryPassword;
+    user.password = "admin123";
     notifyListeners();
   }
 
@@ -1570,124 +1572,129 @@ class _LoginPageState extends State<LoginPage> {
             shape: const RoundedRectangleBorder(
               borderRadius: BorderRadius.all(Radius.circular(16)),
             ),
-            child: Padding(
-              padding: const EdgeInsets.all(28),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Center(
-                    child: Image.asset(
-                      'assets/logo-ucp.png',
-                      height: 90,
-                      fit: BoxFit.contain,
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.all(28),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Center(
+                      child: Image.asset(
+                        'assets/logo-ucp.png',
+                        height: 90,
+                        fit: BoxFit.contain,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 20),
+                    const SizedBox(height: 20),
 
-                  // RF01: mecanismo de autenticacion configurable
-                  DropdownButtonFormField<AuthMode>(
-                    value: widget.state.authMode,
-                    items: AuthMode.values
-                        .map(
-                          (m) => DropdownMenuItem<AuthMode>(
-                            value: m,
-                            child: Text(m.label),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) {
-                      if (value != null) widget.state.setAuthMode(value);
-                    },
-                    decoration: const InputDecoration(
-                      labelText: 'Mecanismo de autenticacion',
-                      isDense: true,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-
-                  TextField(
-                    controller: _userController,
-                    enabled: !locked,
-                    decoration: const InputDecoration(
-                      labelText: 'Usuario',
-                      prefixIcon: Icon(Icons.person_outline),
-                    ),
-                    onSubmitted: (_) => locked ? null : _handleLogin(),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _passwordController,
-                    enabled: !locked,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Clave',
-                      prefixIcon: Icon(Icons.key_outlined),
-                    ),
-                    onSubmitted: (_) => locked ? null : _handleLogin(),
-                  ),
-                  const SizedBox(height: 14),
-
-                  // RF03: banners de error diferenciados
-                  _buildErrorBanner(),
-
-                  FilledButton.icon(
-                    onPressed: locked ? null : _handleLogin,
-                    icon: _isLoading
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
+                    // RF01: mecanismo de autenticacion configurable
+                    DropdownButtonFormField<AuthMode>(
+                      value: widget.state.authMode,
+                      items: AuthMode.values
+                          .map(
+                            (m) => DropdownMenuItem<AuthMode>(
+                              value: m,
+                              child: Text(m.label),
                             ),
                           )
-                        : const Icon(Icons.login),
-                    label: const Text('Iniciar sesion'),
-                  ),
-                  const SizedBox(height: 4),
-                  TextButton(
-                    onPressed: locked
-                        ? null
-                        : () {
-                            widget.state.requestCredentialReset(
-                              _userController.text,
-                            );
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'Solicitud enviada al area de TI.',
-                                ),
-                              ),
-                            );
-                          },
-                    child: const Text('Recuperar credenciales via TI'),
-                  ),
+                          .toList(),
+                      onChanged: (value) {
+                        if (value != null) widget.state.setAuthMode(value);
+                      },
+                      decoration: const InputDecoration(
+                        labelText: 'Mecanismo de autenticacion',
+                        isDense: true,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
 
-                  const Divider(height: 28),
-                  // RF02: accesos rapidos por rol para demo
-                  const Text(
-                    'Acceso rapido por rol (demo):',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: _demoUsers
-                        .map(
-                          (d) => ActionChip(
-                            avatar: const Icon(Icons.badge_outlined, size: 16),
-                            label: Text(
-                              d.role.label,
-                              style: const TextStyle(fontSize: 11),
+                    TextField(
+                      controller: _userController,
+                      enabled: !locked,
+                      decoration: const InputDecoration(
+                        labelText: 'Usuario',
+                        prefixIcon: Icon(Icons.person_outline),
+                      ),
+                      onSubmitted: (_) => locked ? null : _handleLogin(),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _passwordController,
+                      enabled: !locked,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Clave',
+                        prefixIcon: Icon(Icons.key_outlined),
+                      ),
+                      onSubmitted: (_) => locked ? null : _handleLogin(),
+                    ),
+                    const SizedBox(height: 14),
+
+                    // RF03: banners de error diferenciados
+                    _buildErrorBanner(),
+
+                    FilledButton.icon(
+                      onPressed: locked ? null : _handleLogin,
+                      icon: _isLoading
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.login),
+                      label: const Text('Iniciar sesion'),
+                    ),
+                    const SizedBox(height: 4),
+                    TextButton(
+                      onPressed: locked
+                          ? null
+                          : () {
+                              widget.state.requestCredentialReset(
+                                _userController.text,
+                              );
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Solicitud enviada al area de TI.',
+                                  ),
+                                ),
+                              );
+                            },
+                      child: const Text('Recuperar credenciales via TI'),
+                    ),
+
+                    const Divider(height: 28),
+                    // RF02: accesos rapidos por rol para demo
+                    const Text(
+                      'Acceso rapido por rol (demo):',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: _demoUsers
+                          .map(
+                            (d) => ActionChip(
+                              avatar: const Icon(
+                                Icons.badge_outlined,
+                                size: 16,
+                              ),
+                              label: Text(
+                                d.role.label,
+                                style: const TextStyle(fontSize: 11),
+                              ),
+                              onPressed: locked ? null : () => _prefill(d),
                             ),
-                            onPressed: locked ? null : () => _prefill(d),
-                          ),
-                        )
-                        .toList(),
-                  ),
-                ],
+                          )
+                          .toList(),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

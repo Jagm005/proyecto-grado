@@ -2,7 +2,7 @@ const router = require('express').Router();
 const pool   = require('../db');
 
 const MAX_FAILED_ATTEMPTS = 5;
-const LOCK_MINUTES        = 15;
+const LOCK_MINUTES        = 1;
 
 // POST /api/auth/login
 router.post('/login', async (req, res, next) => {
@@ -68,7 +68,9 @@ router.post('/login', async (req, res, next) => {
       username:  user.username,
       fullName:  user.full_name,
       email:     user.email,
-      roles:     user.roles,
+      roles:     Array.isArray(user.roles)
+                   ? user.roles
+                   : String(user.roles).replace(/^{|}$/g, '').split(',').filter(Boolean),
       area:      user.area ?? '',
       isActive:  user.is_active,
     });
