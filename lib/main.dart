@@ -638,6 +638,10 @@ class AppState extends ChangeNotifier {
           )
           .timeout(const Duration(seconds: 10));
 
+      if (!response.body.trimLeft().startsWith('{')) {
+        return 'INFO:El servidor no responde correctamente. Cambie a modo local.';
+      }
+
       final body = jsonDecode(response.body) as Map<String, dynamic>;
 
       if (response.statusCode == 200) {
@@ -658,7 +662,9 @@ class AppState extends ChangeNotifier {
       }
 
       final code = body['code'] as String? ?? 'INFO';
-      final message = (body['message'] ?? body['error']) as String? ?? 'Error desconocido del servidor';
+      final message =
+          (body['message'] ?? body['error']) as String? ??
+          'Error desconocido del servidor';
       final seconds = body['seconds'] as int? ?? 900;
       final remaining = body['remaining'] as int? ?? 0;
 
@@ -760,8 +766,10 @@ class AppState extends ChangeNotifier {
     const chars =
         'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#\$%&*';
     final rng = Random.secure();
-    final password =
-        List.generate(10, (_) => chars[rng.nextInt(chars.length)]).join();
+    final password = List.generate(
+      10,
+      (_) => chars[rng.nextInt(chars.length)],
+    ).join();
     user.password = password;
     // Marcar como aprobadas las solicitudes pendientes de ese usuario
     for (final n in notifications) {
@@ -812,7 +820,8 @@ class AppState extends ChangeNotifier {
           return null;
         }
         final body = jsonDecode(response.body) as Map<String, dynamic>;
-        return (body['error'] as String?) ?? 'Error al crear el usuario en el servidor';
+        return (body['error'] as String?) ??
+            'Error al crear el usuario en el servidor';
       } on http.ClientException {
         return 'No se pudo conectar al servidor';
       } catch (e) {
@@ -829,9 +838,7 @@ class AppState extends ChangeNotifier {
   /// Retorna null si exitoso, o un mensaje de error con prefijo INFO:...
   Future<String?> loginWithGoogle() async {
     try {
-      final googleSignIn = GoogleSignIn(
-        scopes: ['email'],
-      );
+      final googleSignIn = GoogleSignIn(scopes: ['email']);
       // Intenta login silencioso primero (sesion previa), si no abre selector
       GoogleSignInAccount? account = await googleSignIn.signInSilently();
       account ??= await googleSignIn.signIn();
@@ -848,6 +855,10 @@ class AppState extends ChangeNotifier {
               body: jsonEncode({'email': email}),
             )
             .timeout(const Duration(seconds: 10));
+
+        if (!response.body.trimLeft().startsWith('{')) {
+          return 'INFO:El servidor no responde correctamente. Cambie a modo local.';
+        }
 
         final body = jsonDecode(response.body) as Map<String, dynamic>;
 
@@ -866,14 +877,16 @@ class AppState extends ChangeNotifier {
           notifyListeners();
           return null;
         }
-        final message = (body['message'] as String?) ?? 'Error desconocido';
+        final message =
+            (body['message'] ?? body['error']) as String? ??
+            'Error desconocido';
         return 'INFO:$message';
       }
 
       // Modo local: buscar por email en lista local
-      final localUser = users.where(
-        (u) => u.email.toLowerCase() == email.toLowerCase(),
-      ).firstOrNull;
+      final localUser = users
+          .where((u) => u.email.toLowerCase() == email.toLowerCase())
+          .firstOrNull;
       if (localUser == null) {
         return 'INFO:No existe un usuario registrado con este correo de Google.';
       }
@@ -1175,7 +1188,6 @@ class AppState extends ChangeNotifier {
     );
     return doc.save();
   }
-
 }
 
 class LoginPage extends StatefulWidget {
@@ -1421,8 +1433,9 @@ class _LoginPageState extends State<LoginPage> {
                                 );
                                 return;
                               }
-                              final sent =
-                                  widget.state.requestCredentialReset(username);
+                              final sent = widget.state.requestCredentialReset(
+                                username,
+                              );
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
                                   content: Text(
@@ -2578,10 +2591,7 @@ class _AssetsPageState extends State<AssetsPage> {
         AppUser? selectedResponsible;
         Uint8List? capturedPhotoBytes;
 
-        Future<void> pickPhoto(
-          ImageSource source,
-          StateSetter setLocal,
-        ) async {
+        Future<void> pickPhoto(ImageSource source, StateSetter setLocal) async {
           try {
             final picker = ImagePicker();
             final photo = await picker.pickImage(
@@ -2725,9 +2735,9 @@ class _AssetsPageState extends State<AssetsPage> {
                             color: Colors.grey.shade100,
                             borderRadius: BorderRadius.circular(10),
                             border: Border.all(
-                              color: const Color(0xFF00804E).withValues(
-                                alpha: 0.4,
-                              ),
+                              color: const Color(
+                                0xFF00804E,
+                              ).withValues(alpha: 0.4),
                               style: BorderStyle.solid,
                             ),
                           ),
@@ -2767,8 +2777,9 @@ class _AssetsPageState extends State<AssetsPage> {
                                     Icon(
                                       Icons.add_a_photo_outlined,
                                       size: 32,
-                                      color: const Color(0xFF00804E)
-                                          .withValues(alpha: 0.6),
+                                      color: const Color(
+                                        0xFF00804E,
+                                      ).withValues(alpha: 0.6),
                                     ),
                                     const SizedBox(height: 6),
                                     Text(
@@ -3052,10 +3063,8 @@ class _AssetsPageState extends State<AssetsPage> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (ctx) => _AssetScanResultSheet(
-        asset: asset,
-        state: widget.state,
-      ),
+      builder: (ctx) =>
+          _AssetScanResultSheet(asset: asset, state: widget.state),
     );
   }
 }
@@ -3243,10 +3252,7 @@ class NotificationsPage extends StatelessWidget {
                             Padding(
                               padding: const EdgeInsets.only(top: 10),
                               child: notif.type == 'password_reset_request'
-                                  ? _buildPasswordResetAction(
-                                      context,
-                                      notif,
-                                    )
+                                  ? _buildPasswordResetAction(context, notif)
                                   : Row(
                                       mainAxisAlignment: MainAxisAlignment.end,
                                       children: [
@@ -3257,8 +3263,10 @@ class NotificationsPage extends StatelessWidget {
                                               color: Colors.red,
                                             ),
                                           ),
-                                          icon:
-                                              const Icon(Icons.close, size: 16),
+                                          icon: const Icon(
+                                            Icons.close,
+                                            size: 16,
+                                          ),
                                           label: const Text('Denegar'),
                                           onPressed: () =>
                                               state.denyNotification(notif),
@@ -3492,8 +3500,7 @@ class _ReportsPageState extends State<ReportsPage> {
               ),
               OutlinedButton(
                 onPressed: () async {
-                  final bytes =
-                      widget.state.generateExcelBytes(currentReport);
+                  final bytes = widget.state.generateExcelBytes(currentReport);
                   if (!context.mounted) return;
                   final fileName =
                       'reporte_${period.name}_${DateFormat('yyyyMMdd').format(DateTime.now())}.xlsx';
@@ -3640,8 +3647,9 @@ class _ExcelPreviewPage extends StatelessWidget {
                       )
                       .toList(),
                   rows: reportAssets.map((a) {
-                    final dep =
-                        state.depreciationValue(a, DateTime.now()).toStringAsFixed(0);
+                    final dep = state
+                        .depreciationValue(a, DateTime.now())
+                        .toStringAsFixed(0);
                     return DataRow(
                       cells: [
                         DataCell(Text(a.code)),
@@ -3670,21 +3678,18 @@ class _ExcelPreviewPage extends StatelessWidget {
       final tempDir = await getTemporaryDirectory();
       final file = File('${tempDir.path}/$fileName');
       await file.writeAsBytes(excelBytes);
-      await Share.shareXFiles(
-        [
-          XFile(
-            file.path,
-            mimeType:
-                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          ),
-        ],
-        subject: fileName,
-      );
+      await Share.shareXFiles([
+        XFile(
+          file.path,
+          mimeType:
+              'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ),
+      ], subject: fileName);
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error al compartir: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error al compartir: $e')));
       }
     }
   }
@@ -3717,9 +3722,9 @@ class _ExcelPreviewPage extends StatelessWidget {
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error al guardar: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error al guardar: $e')));
       }
     }
   }
@@ -3781,9 +3786,9 @@ class _PdfPreviewPage extends StatelessWidget {
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error al guardar: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error al guardar: $e')));
       }
     }
   }
@@ -3905,18 +3910,22 @@ class _ScanOverlay extends StatelessWidget {
                 height: _boxSize,
                 child: Stack(
                   children: [
-                    _corner(Alignment.topLeft,
-                        const BorderRadius.only(
-                            topLeft: Radius.circular(6))),
-                    _corner(Alignment.topRight,
-                        const BorderRadius.only(
-                            topRight: Radius.circular(6))),
-                    _corner(Alignment.bottomLeft,
-                        const BorderRadius.only(
-                            bottomLeft: Radius.circular(6))),
-                    _corner(Alignment.bottomRight,
-                        const BorderRadius.only(
-                            bottomRight: Radius.circular(6))),
+                    _corner(
+                      Alignment.topLeft,
+                      const BorderRadius.only(topLeft: Radius.circular(6)),
+                    ),
+                    _corner(
+                      Alignment.topRight,
+                      const BorderRadius.only(topRight: Radius.circular(6)),
+                    ),
+                    _corner(
+                      Alignment.bottomLeft,
+                      const BorderRadius.only(bottomLeft: Radius.circular(6)),
+                    ),
+                    _corner(
+                      Alignment.bottomRight,
+                      const BorderRadius.only(bottomRight: Radius.circular(6)),
+                    ),
                     // Linea de escaneo animada
                     AnimatedBuilder(
                       animation: lineAnim,
@@ -4049,8 +4058,8 @@ class _AssetScanResultSheet extends StatelessWidget {
     final stateColor = asset.state == AssetState.activo
         ? const Color(0xFF00804E)
         : asset.state == AssetState.enReparacion
-            ? Colors.orange
-            : Colors.red;
+        ? Colors.orange
+        : Colors.red;
 
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(
@@ -4112,8 +4121,10 @@ class _AssetScanResultSheet extends StatelessWidget {
                 ),
               ),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
                 decoration: BoxDecoration(
                   color: stateColor.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(20),
@@ -4142,15 +4153,20 @@ class _AssetScanResultSheet extends StatelessWidget {
             ),
             const SizedBox(height: 16),
           ],
-          _infoRow(Icons.location_on_outlined, 'Ubicacion',
-              asset.physicalLocation),
+          _infoRow(
+            Icons.location_on_outlined,
+            'Ubicacion',
+            asset.physicalLocation,
+          ),
           _infoRow(Icons.person_outlined, 'Responsable', asset.responsible),
           _infoRow(Icons.business_outlined, 'Dependencia', asset.dependency),
-          _infoRow(Icons.category_outlined, 'Categoria',
-              '${asset.category} - ${asset.subcategory}'),
+          _infoRow(
+            Icons.category_outlined,
+            'Categoria',
+            '${asset.category} - ${asset.subcategory}',
+          ),
           if (asset.observations.isNotEmpty)
-            _infoRow(
-                Icons.notes_outlined, 'Observaciones', asset.observations),
+            _infoRow(Icons.notes_outlined, 'Observaciones', asset.observations),
           const SizedBox(height: 20),
           SizedBox(
             width: double.infinity,
