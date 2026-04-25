@@ -1,0 +1,38 @@
+{
+  "project_info": {
+    "project_number": "421805141170",
+    "project_id": "winter-alliance-379422",
+    "storage_bucket": "winter-alliance-379422.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:421805141170:android:0000000000000000",
+        "android_info": {
+          "package_name": "com.example.gestion_inventario"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "421805141170-avtr91aaj56ohm83l2jjvbqoi39f1cvo.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.gestion_inventario",
+            "certificate_hash": "af074fb45402635513eb6265a072711004e0df30"
+          }
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": ""
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

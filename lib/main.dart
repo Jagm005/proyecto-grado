@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -9,9 +10,14 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:excel/excel.dart' hide Border, BorderStyle;
+import 'package:share_plus/share_plus.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -627,7 +633,8 @@ class AppState extends ChangeNotifier {
           .post(
             Uri.parse('$_backendUrl/api/auth/login'),
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'username': username, 'password': password}),
+            // "identifier" acepta username o correo electronico
+            body: jsonEncode({'identifier': username, 'password': password}),
           )
           .timeout(const Duration(seconds: 10));
 
@@ -715,19 +722,177 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void requestCredentialReset(String username) {
+  /// El usuario solicita restablecer su contraseña → crea notificación al admin.
+  /// Retorna false si el username no existe.
+  bool requestCredentialReset(String username) {
     final user = _findUserByUsername(username);
-    if (user == null) {
-      return;
-    }
-    final temporaryPassword = 'Temp${Random().nextInt(8999) + 1000}';
-    user.password = "admin123";
+    if (user == null) return false;
+    // Evitar duplicar solicitudes pendientes del mismo usuario
+    final yaExiste = notifications.any(
+      (n) =>
+          n.type == 'password_reset_request' &&
+          n.relatedId == user.username &&
+          n.status == NotificationStatus.pendiente,
+    );
+    if (yaExiste) return true;
+    final notifId = 'NOTIF-${DateTime.now().millisecondsSinceEpoch}';
+    notifications.add(
+      AppNotification(
+        id: notifId,
+        type: 'password_reset_request',
+        title: 'Solicitud de restablecimiento de contraseña',
+        body:
+            '${user.fullName} (${user.username}) ha olvidado su contraseña y solicita que el administrador la restablezca.',
+        createdAt: DateTime.now(),
+        fromUser: user.username,
+        relatedId: user.username,
+        toRoles: [UserRole.administrador.name],
+      ),
+    );
     notifyListeners();
+    return true;
   }
 
-  void createUser(AppUser user) {
+  /// Genera una contraseña aleatoria segura, la asigna al usuario y aprueba
+  /// cualquier solicitud de reseteo pendiente para ese usuario.
+  /// Retorna la nueva contraseña en texto plano para mostrársela al admin.
+  String adminResetPassword(AppUser user) {
+    const chars =
+        'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#\$%&*';
+    final rng = Random.secure();
+    final password =
+        List.generate(10, (_) => chars[rng.nextInt(chars.length)]).join();
+    user.password = password;
+    // Marcar como aprobadas las solicitudes pendientes de ese usuario
+    for (final n in notifications) {
+      if (n.type == 'password_reset_request' &&
+          n.relatedId == user.username &&
+          n.status == NotificationStatus.pendiente) {
+        n.status = NotificationStatus.aprobada;
+        n.read = true;
+      }
+    }
+    notifyListeners();
+    return password;
+  }
+
+  /// ¿Tiene el usuario alguna solicitud de reseteo de contraseña pendiente?
+  bool hasPendingPasswordReset(AppUser user) {
+    return notifications.any(
+      (n) =>
+          n.type == 'password_reset_request' &&
+          n.relatedId == user.username &&
+          n.status == NotificationStatus.pendiente,
+    );
+  }
+
+  /// Crea un usuario. En modo institucional persiste en el backend.
+  /// Retorna null si fue exitoso, o un mensaje de error.
+  Future<String?> createUser(AppUser user) async {
+    if (authMode == AuthMode.institutional) {
+      try {
+        final response = await http
+            .post(
+              Uri.parse('$_backendUrl/api/users'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({
+                'id': user.id,
+                'username': user.username,
+                'full_name': user.fullName,
+                'email': user.email,
+                'password': user.password,
+                'roles': user.roles.map((r) => r.name).toList(),
+                'area': user.area,
+              }),
+            )
+            .timeout(const Duration(seconds: 10));
+        if (response.statusCode == 201) {
+          users.add(user);
+          notifyListeners();
+          return null;
+        }
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+        return (body['error'] as String?) ?? 'Error al crear el usuario en el servidor';
+      } on http.ClientException {
+        return 'No se pudo conectar al servidor';
+      } catch (e) {
+        return 'Error inesperado: $e';
+      }
+    }
     users.add(user);
     notifyListeners();
+    return null;
+  }
+
+  /// Login con Google: obtiene el correo de la cuenta Google y verifica
+  /// que exista en la BD. No requiere contraseña.
+  /// Retorna null si exitoso, o un mensaje de error con prefijo INFO:...
+  Future<String?> loginWithGoogle() async {
+    try {
+      final googleSignIn = GoogleSignIn(
+        scopes: ['email'],
+        serverClientId:
+            '421805141170-avtr91aaj56ohm83l2jjvbqoi39f1cvo.apps.googleusercontent.com',
+      );
+      // Intenta login silencioso primero (sesion previa), si no abre selector
+      GoogleSignInAccount? account = await googleSignIn.signInSilently();
+      account ??= await googleSignIn.signIn();
+      if (account == null) {
+        return 'INFO:Inicio de sesion con Google cancelado.';
+      }
+      final email = account.email;
+
+      if (authMode == AuthMode.institutional) {
+        final response = await http
+            .post(
+              Uri.parse('$_backendUrl/api/auth/google-login'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'email': email}),
+            )
+            .timeout(const Duration(seconds: 10));
+
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+
+        if (response.statusCode == 200) {
+          final rawRoles = (body['roles'] as List).cast<String>();
+          currentUser = AppUser(
+            id: body['id'] as String,
+            username: body['username'] as String,
+            fullName: body['fullName'] as String,
+            email: body['email'] as String,
+            password: '',
+            area: (body['area'] as String?) ?? '',
+            roles: rawRoles.map((r) => UserRole.values.byName(r)).toList(),
+            isActive: body['isActive'] as bool,
+          );
+          notifyListeners();
+          return null;
+        }
+        final message = (body['message'] as String?) ?? 'Error desconocido';
+        return 'INFO:$message';
+      }
+
+      // Modo local: buscar por email en lista local
+      final localUser = users.where(
+        (u) => u.email.toLowerCase() == email.toLowerCase(),
+      ).firstOrNull;
+      if (localUser == null) {
+        return 'INFO:No existe un usuario registrado con este correo de Google.';
+      }
+      if (!localUser.isActive) {
+        return 'INFO:Usuario desactivado. Contacte al Administrador';
+      }
+      localUser.lastSession = DateTime.now();
+      currentUser = localUser;
+      notifyListeners();
+      return null;
+    } on http.ClientException catch (e) {
+      debugPrint('Google login ClientException: $e');
+      return 'INFO:No se pudo conectar al servidor.';
+    } catch (e) {
+      debugPrint('Google login error: $e');
+      return 'INFO:Error al iniciar sesion con Google: $e';
+    }
   }
 
   void updateUser(
@@ -919,6 +1084,41 @@ class AppState extends ChangeNotifier {
     return max(0, asset.acquisitionValue - depreciation);
   }
 
+  List<int> generateExcelBytes(List<Asset> reportAssets) {
+    final ex = Excel.createExcel();
+    ex.rename('Sheet1', 'Inventario');
+    final sheet = ex['Inventario'];
+    sheet.appendRow([
+      TextCellValue('Codigo'),
+      TextCellValue('Nombre'),
+      TextCellValue('Categoria'),
+      TextCellValue('Subcategoria'),
+      TextCellValue('Ubicacion'),
+      TextCellValue('Responsable'),
+      TextCellValue('Dependencia'),
+      TextCellValue('Programa'),
+      TextCellValue('Estado'),
+      TextCellValue('Valor Adquisicion'),
+      TextCellValue('Valor Depreciado'),
+    ]);
+    for (final a in reportAssets) {
+      sheet.appendRow([
+        TextCellValue(a.code),
+        TextCellValue(a.name),
+        TextCellValue(a.category),
+        TextCellValue(a.subcategory),
+        TextCellValue(a.physicalLocation),
+        TextCellValue(a.responsible),
+        TextCellValue(a.dependency),
+        TextCellValue(a.program),
+        TextCellValue(a.state.label),
+        DoubleCellValue(a.acquisitionValue),
+        DoubleCellValue(depreciationValue(a, DateTime.now())),
+      ]);
+    }
+    return ex.encode()!;
+  }
+
   String generateCsv(List<Asset> reportAssets) {
     final buffer = StringBuffer();
     buffer.writeln(
@@ -1083,6 +1283,22 @@ class _LoginPageState extends State<LoginPage> {
     });
   }
 
+  Future<void> _handleGoogleLogin() async {
+    if (_isLoading) return;
+    setState(() => _isLoading = true);
+    final raw = await widget.state.loginWithGoogle();
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+    if (raw == null) return; // exitoso
+    final parts = raw.split(':');
+    final prefix = parts[0];
+    final payload = parts.length > 1 ? parts.sublist(1).join(':') : '';
+    setState(() {
+      _authError = _AuthError.info;
+      _infoMessage = payload.isNotEmpty ? payload : prefix;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final locked = _authError == _AuthError.locked || _isLoading;
@@ -1174,23 +1390,52 @@ class _LoginPageState extends State<LoginPage> {
                           : const Icon(Icons.login),
                       label: const Text('Iniciar sesion'),
                     ),
+                    const SizedBox(height: 8),
+                    // Boton de ingreso con Google
+                    OutlinedButton.icon(
+                      onPressed: locked ? null : _handleGoogleLogin,
+                      icon: Image.network(
+                        'https://www.google.com/favicon.ico',
+                        width: 18,
+                        height: 18,
+                        errorBuilder: (_, __, ___) =>
+                            const Icon(Icons.g_mobiledata, size: 22),
+                      ),
+                      label: const Text('Continuar con Google'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.black87,
+                        side: const BorderSide(color: Color(0xFFDDDDDD)),
+                      ),
+                    ),
                     const SizedBox(height: 4),
                     TextButton(
                       onPressed: locked
                           ? null
                           : () {
-                              widget.state.requestCredentialReset(
-                                _userController.text,
-                              );
+                              final username = _userController.text.trim();
+                              if (username.isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Ingresa tu nombre de usuario antes de solicitar el restablecimiento.',
+                                    ),
+                                  ),
+                                );
+                                return;
+                              }
+                              final sent =
+                                  widget.state.requestCredentialReset(username);
                               ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
+                                SnackBar(
                                   content: Text(
-                                    'Solicitud enviada al area de TI.',
+                                    sent
+                                        ? 'Solicitud enviada al administrador. Espera que restablezca tu contraseña.'
+                                        : 'Usuario "$username" no encontrado.',
                                   ),
                                 ),
                               );
                             },
-                      child: const Text('Recuperar credenciales via TI'),
+                      child: const Text('Olvidé mi contraseña'),
                     ),
 
                     const Divider(height: 28),
@@ -1674,6 +1919,32 @@ class _UsersPageState extends State<UsersPage> {
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        // Botón de restaurar contraseña con badge si hay solicitud pendiente
+                        Builder(
+                          builder: (ctx) {
+                            final hasPending = widget.state
+                                .hasPendingPasswordReset(user);
+                            final btn = IconButton(
+                              icon: Icon(
+                                Icons.key_outlined,
+                                color: hasPending
+                                    ? Colors.orange.shade700
+                                    : Colors.grey.shade600,
+                              ),
+                              tooltip: hasPending
+                                  ? 'Restaurar contraseña (solicitud pendiente)'
+                                  : 'Restaurar contraseña',
+                              onPressed: () =>
+                                  _resetPasswordDialog(context, user),
+                            );
+                            return hasPending
+                                ? Badge(
+                                    backgroundColor: Colors.orange,
+                                    child: btn,
+                                  )
+                                : btn;
+                          },
+                        ),
                         IconButton(
                           icon: const Icon(Icons.edit_outlined),
                           tooltip: 'Editar',
@@ -1720,6 +1991,76 @@ class _UsersPageState extends State<UsersPage> {
                 );
               },
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _resetPasswordDialog(BuildContext context, AppUser user) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Restaurar contraseña'),
+        content: Text(
+          '¿Generar una nueva contraseña aleatoria para ${user.fullName} (${user.username})?\n\n'
+          'La contraseña actual quedará invalidada.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Restaurar'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    if (!mounted) return;
+    final newPassword = widget.state.adminResetPassword(user);
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Contraseña restablecida'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Nueva contraseña para ${user.username}:'),
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF0F7F4),
+                border: Border.all(color: const Color(0xFF00804E)),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: SelectableText(
+                newPassword,
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 2,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'Comparta esta contraseña al usuario de forma segura. No se podrá recuperar después.',
+              style: TextStyle(fontSize: 12, color: Colors.black54),
+            ),
+          ],
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cerrar'),
           ),
         ],
       ),
@@ -1879,18 +2220,25 @@ class _UsersPageState extends State<UsersPage> {
                       setLocal(() => errorMsg = 'Selecciona al menos un rol.');
                       return;
                     }
-                    widget.state.createUser(
-                      AppUser(
-                        id: 'U${widget.state.users.length + 1}'.padLeft(4, '0'),
-                        username: u,
-                        fullName: f,
-                        email: e,
-                        area: area.text.trim(),
-                        password: p,
-                        roles: selectedRoles.toList(),
-                      ),
+                    final newUser = AppUser(
+                      id: 'U${(widget.state.users.length + 1).toString().padLeft(3, '0')}',
+                      username: u,
+                      fullName: f,
+                      email: e,
+                      area: area.text.trim(),
+                      password: p,
+                      roles: selectedRoles.toList(),
                     );
-                    Navigator.pop(dialogCtx);
+                    // Mostrar indicador de carga mientras se guarda
+                    setLocal(() => errorMsg = null);
+                    widget.state.createUser(newUser).then((err) {
+                      if (!dialogCtx.mounted) return;
+                      if (err != null) {
+                        setLocal(() => errorMsg = err);
+                      } else {
+                        Navigator.pop(dialogCtx);
+                      }
+                    });
                   },
                   child: const Text('Guardar'),
                 ),
@@ -2818,9 +3166,13 @@ class NotificationsPage extends StatelessWidget {
                           Row(
                             children: [
                               Icon(
-                                Icons.delete_sweep_outlined,
+                                notif.type == 'password_reset_request'
+                                    ? Icons.lock_reset_outlined
+                                    : Icons.delete_sweep_outlined,
                                 size: 18,
-                                color: const Color(0xFF00804E),
+                                color: notif.type == 'password_reset_request'
+                                    ? Colors.orange.shade700
+                                    : const Color(0xFF00804E),
                               ),
                               const SizedBox(width: 8),
                               Expanded(
@@ -2892,28 +3244,39 @@ class NotificationsPage extends StatelessWidget {
                               notif.status == NotificationStatus.pendiente)
                             Padding(
                               padding: const EdgeInsets.only(top: 10),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.end,
-                                children: [
-                                  OutlinedButton.icon(
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: Colors.red,
-                                      side: const BorderSide(color: Colors.red),
+                              child: notif.type == 'password_reset_request'
+                                  ? _buildPasswordResetAction(
+                                      context,
+                                      notif,
+                                    )
+                                  : Row(
+                                      mainAxisAlignment: MainAxisAlignment.end,
+                                      children: [
+                                        OutlinedButton.icon(
+                                          style: OutlinedButton.styleFrom(
+                                            foregroundColor: Colors.red,
+                                            side: const BorderSide(
+                                              color: Colors.red,
+                                            ),
+                                          ),
+                                          icon:
+                                              const Icon(Icons.close, size: 16),
+                                          label: const Text('Denegar'),
+                                          onPressed: () =>
+                                              state.denyNotification(notif),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        FilledButton.icon(
+                                          icon: const Icon(
+                                            Icons.check,
+                                            size: 16,
+                                          ),
+                                          label: const Text('Aprobar'),
+                                          onPressed: () =>
+                                              state.approveNotification(notif),
+                                        ),
+                                      ],
                                     ),
-                                    icon: const Icon(Icons.close, size: 16),
-                                    label: const Text('Denegar'),
-                                    onPressed: () =>
-                                        state.denyNotification(notif),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  FilledButton.icon(
-                                    icon: const Icon(Icons.check, size: 16),
-                                    label: const Text('Aprobar'),
-                                    onPressed: () =>
-                                        state.approveNotification(notif),
-                                  ),
-                                ],
-                              ),
                             ),
                           if (!isAdmin && unread)
                             Align(
@@ -2933,6 +3296,92 @@ class NotificationsPage extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+
+  Widget _buildPasswordResetAction(
+    BuildContext context,
+    AppNotification notif,
+  ) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: Colors.red,
+            side: const BorderSide(color: Colors.red),
+          ),
+          icon: const Icon(Icons.close, size: 16),
+          label: const Text('Ignorar'),
+          onPressed: () => state.denyNotification(notif),
+        ),
+        const SizedBox(width: 10),
+        FilledButton.icon(
+          style: FilledButton.styleFrom(
+            backgroundColor: Colors.orange.shade700,
+          ),
+          icon: const Icon(Icons.lock_reset, size: 16),
+          label: const Text('Restablecer contraseña'),
+          onPressed: () async {
+            final user = state.users.cast<AppUser?>().firstWhere(
+              (u) => u?.username == notif.relatedId,
+              orElse: () => null,
+            );
+            if (user == null) {
+              state.denyNotification(notif);
+              return;
+            }
+            final newPassword = state.adminResetPassword(user);
+            if (!context.mounted) return;
+            await showDialog<void>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Contraseña restablecida'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Nueva contraseña para ${user.username}:'),
+                    const SizedBox(height: 12),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF0F7F4),
+                        border: Border.all(color: const Color(0xFF00804E)),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: SelectableText(
+                        newPassword,
+                        style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 2,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Comparta esta contraseña al usuario de forma segura.',
+                      style: TextStyle(fontSize: 12, color: Colors.black54),
+                    ),
+                  ],
+                ),
+                actions: [
+                  FilledButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('Cerrar'),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ],
     );
   }
 }
@@ -3045,18 +3494,24 @@ class _ReportsPageState extends State<ReportsPage> {
               ),
               OutlinedButton(
                 onPressed: () async {
-                  final csv = widget.state.generateCsv(currentReport);
-                  await Clipboard.setData(ClipboardData(text: csv));
-                  if (!context.mounted) {
-                    return;
-                  }
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('CSV generado y copiado al portapapeles.'),
+                  final bytes =
+                      widget.state.generateExcelBytes(currentReport);
+                  if (!context.mounted) return;
+                  final fileName =
+                      'reporte_${period.name}_${DateFormat('yyyyMMdd').format(DateTime.now())}.xlsx';
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => _ExcelPreviewPage(
+                        excelBytes: Uint8List.fromList(bytes),
+                        fileName: fileName,
+                        reportAssets: currentReport,
+                        state: widget.state,
+                      ),
                     ),
                   );
                 },
-                child: const Text('Exportar CSV'),
+                child: const Text('Exportar Excel'),
               ),
               OutlinedButton(
                 onPressed: () async {
@@ -3064,30 +3519,20 @@ class _ReportsPageState extends State<ReportsPage> {
                     currentReport,
                     period: period,
                   );
-                  if (!context.mounted) {
-                    return;
-                  }
-                  showDialog<void>(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      title: const Text('PDF generado'),
-                      content: Text(
-                        'Bytes generados: ${bytes.length}\nBase64 (fragmento): ${base64Encode(bytes).substring(0, min(120, base64Encode(bytes).length))}...',
+                  if (!context.mounted) return;
+                  final fileName =
+                      'reporte_${period.name}_${DateFormat('yyyyMMdd').format(DateTime.now())}.pdf';
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => _PdfPreviewPage(
+                        pdfBytes: Uint8List.fromList(bytes),
+                        fileName: fileName,
                       ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text('Cerrar'),
-                        ),
-                      ],
                     ),
                   );
                 },
                 child: const Text('Exportar PDF'),
-              ),
-              OutlinedButton(
-                onPressed: () => _showAuditReport(context),
-                child: const Text('Reporte auditoria'),
               ),
             ],
           ),
@@ -3125,38 +3570,224 @@ class _ReportsPageState extends State<ReportsPage> {
       ),
     );
   }
+}
 
-  Future<void> _showAuditReport(BuildContext context) async {
-    final findings = widget.state.auditFindings();
-    await showDialog<void>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Reporte de auditoria'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'No encontrados: ${(findings['notFound'] as List).join(', ')}',
-              ),
-              Text(
-                'Duplicados: ${(findings['duplicated'] as List).join(', ')}',
-              ),
-              Text(
-                'Sin responsable: ${(findings['withoutResponsible'] as List).join(', ')}',
-              ),
-            ],
+// ── Visor Excel ───────────────────────────────────────────────────────────────
+
+class _ExcelPreviewPage extends StatelessWidget {
+  const _ExcelPreviewPage({
+    required this.excelBytes,
+    required this.fileName,
+    required this.reportAssets,
+    required this.state,
+  });
+
+  final Uint8List excelBytes;
+  final String fileName;
+  final List<Asset> reportAssets;
+  final AppState state;
+
+  static const _headers = [
+    'Codigo',
+    'Nombre',
+    'Categoria',
+    'Subcategoria',
+    'Ubicacion',
+    'Responsable',
+    'Dependencia',
+    'Programa',
+    'Estado',
+    'Valor',
+    'Depreciado',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(fileName, overflow: TextOverflow.ellipsis),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.share),
+            tooltip: 'Compartir',
+            onPressed: () => _shareFile(context),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cerrar'),
+          IconButton(
+            icon: const Icon(Icons.download),
+            tooltip: 'Descargar',
+            onPressed: () => _saveToDownloads(context),
+          ),
+        ],
+      ),
+      body: reportAssets.isEmpty
+          ? const Center(child: Text('Sin datos para mostrar.'))
+          : SingleChildScrollView(
+              scrollDirection: Axis.vertical,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.all(12),
+                child: DataTable(
+                  columnSpacing: 16,
+                  headingRowColor: WidgetStateProperty.all(
+                    const Color(0xFF00804E).withValues(alpha: 0.1),
+                  ),
+                  columns: _headers
+                      .map(
+                        (h) => DataColumn(
+                          label: Text(
+                            h,
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      )
+                      .toList(),
+                  rows: reportAssets.map((a) {
+                    final dep =
+                        state.depreciationValue(a, DateTime.now()).toStringAsFixed(0);
+                    return DataRow(
+                      cells: [
+                        DataCell(Text(a.code)),
+                        DataCell(Text(a.name)),
+                        DataCell(Text(a.category)),
+                        DataCell(Text(a.subcategory)),
+                        DataCell(Text(a.physicalLocation)),
+                        DataCell(Text(a.responsible)),
+                        DataCell(Text(a.dependency)),
+                        DataCell(Text(a.program)),
+                        DataCell(Text(a.state.label)),
+                        DataCell(Text(a.acquisitionValue.toStringAsFixed(0))),
+                        DataCell(Text(dep)),
+                      ],
+                    );
+                  }).toList(),
+                ),
+              ),
             ),
-          ],
-        );
-      },
     );
+  }
+
+  Future<void> _shareFile(BuildContext context) async {
+    if (kIsWeb) return;
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final file = File('${tempDir.path}/$fileName');
+      await file.writeAsBytes(excelBytes);
+      await Share.shareXFiles(
+        [
+          XFile(
+            file.path,
+            mimeType:
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          ),
+        ],
+        subject: fileName,
+      );
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error al compartir: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _saveToDownloads(BuildContext context) async {
+    if (kIsWeb) return;
+    try {
+      Directory? dir;
+      if (Platform.isIOS) {
+        dir = await getApplicationDocumentsDirectory();
+      } else {
+        dir = await getDownloadsDirectory();
+      }
+      if (dir == null) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No se pudo acceder a la carpeta de descargas.'),
+            ),
+          );
+        }
+        return;
+      }
+      final file = File('${dir.path}/$fileName');
+      await file.writeAsBytes(excelBytes, flush: true);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Guardado en Descargas: $fileName')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error al guardar: $e')),
+        );
+      }
+    }
+  }
+}
+
+// ── Visor PDF ─────────────────────────────────────────────────────────────────
+
+class _PdfPreviewPage extends StatelessWidget {
+  const _PdfPreviewPage({required this.pdfBytes, required this.fileName});
+
+  final Uint8List pdfBytes;
+  final String fileName;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(fileName)),
+      body: PdfPreview(
+        build: (_) async => pdfBytes,
+        allowPrinting: true,
+        allowSharing: true,
+        canChangePageFormat: false,
+        canDebug: false,
+        actions: [
+          PdfPreviewAction(
+            icon: const Icon(Icons.download),
+            onPressed: (ctx, build, pageFormat) => _saveToDownloads(ctx),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _saveToDownloads(BuildContext context) async {
+    if (kIsWeb) return;
+    try {
+      Directory? dir;
+      if (Platform.isIOS) {
+        dir = await getApplicationDocumentsDirectory();
+      } else {
+        dir = await getDownloadsDirectory();
+      }
+      if (dir == null) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No se pudo acceder a la carpeta de descargas.'),
+            ),
+          );
+        }
+        return;
+      }
+      final file = File('${dir.path}/$fileName');
+      await file.writeAsBytes(pdfBytes, flush: true);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Guardado en Descargas: $fileName')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error al guardar: $e')),
+        );
+      }
+    }
   }
 }
 

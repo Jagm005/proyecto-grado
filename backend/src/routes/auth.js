@@ -4,10 +4,12 @@ const pool   = require('../db');
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_MINUTES        = 1;
 
-// POST /api/auth/login
+// POST /api/auth/login — acepta username O correo en el campo "identifier"
 router.post('/login', async (req, res, next) => {
-  const { username, password } = req.body;
-  if (!username || !password) {
+  // Compatibilidad: el campo puede venir como "identifier" o "username"
+  const identifier = ((req.body.identifier || req.body.username) ?? '').trim();
+  const { password } = req.body;
+  if (!identifier || !password) {
     return res.status(400).json({ error: 'Faltan campos requeridos' });
   }
 
@@ -17,8 +19,8 @@ router.post('/login', async (req, res, next) => {
               failed_attempts, lock_until, last_session,
               (password_hash = crypt($2, password_hash)) AS password_ok
        FROM users
-       WHERE lower(username) = lower($1)`,
-      [username.trim(), password],
+       WHERE lower(username) = lower($1) OR lower(email) = lower($1)`,
+      [identifier, password],
     );
 
     if (!rows.length) {
@@ -42,25 +44,73 @@ router.post('/login', async (req, res, next) => {
       if (newFailed >= MAX_FAILED_ATTEMPTS) {
         const lockUntil = new Date(Date.now() + LOCK_MINUTES * 60 * 1000);
         await pool.query(
-          `UPDATE users SET failed_attempts = 0, lock_until = $2
-           WHERE lower(username) = lower($1)`,
-          [username.trim(), lockUntil],
+          `UPDATE users SET failed_attempts = 0, lock_until = $2 WHERE id = $1`,
+          [user.id, lockUntil],
         );
         return res.status(401).json({ code: 'LOCK', seconds: LOCK_MINUTES * 60 });
       }
 
       await pool.query(
-        `UPDATE users SET failed_attempts = $2 WHERE lower(username) = lower($1)`,
-        [username.trim(), newFailed],
+        `UPDATE users SET failed_attempts = $2 WHERE id = $1`,
+        [user.id, newFailed],
       );
       return res.status(401).json({ code: 'WARN', remaining: MAX_FAILED_ATTEMPTS - newFailed });
     }
 
     // Credenciales correctas: reiniciar contadores y registrar sesión
     await pool.query(
-      `UPDATE users SET failed_attempts = 0, lock_until = NULL, last_session = NOW()
-       WHERE lower(username) = lower($1)`,
-      [username.trim()],
+      `UPDATE users SET failed_attempts = 0, lock_until = NULL, last_session = NOW() WHERE id = $1`,
+      [user.id],
+    );
+
+    return res.json({
+      id:        user.id,
+      username:  user.username,
+      fullName:  user.full_name,
+      email:     user.email,
+      roles:     Array.isArray(user.roles)
+                   ? user.roles
+                   : String(user.roles).replace(/^{|}$/g, '').split(',').filter(Boolean),
+      area:      user.area ?? '',
+      isActive:  user.is_active,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/auth/google-login
+// Recibe el correo verificado por Google; si existe en la BD deja pasar sin contraseña.
+router.post('/google-login', async (req, res, next) => {
+  const email = (req.body.email ?? '').trim();
+  if (!email) {
+    return res.status(400).json({ error: 'Falta el correo' });
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, username, full_name, email, roles, is_active, area
+       FROM users
+       WHERE lower(email) = lower($1)`,
+      [email],
+    );
+
+    if (!rows.length) {
+      return res.status(401).json({
+        code: 'INFO',
+        message: 'No existe un usuario registrado con este correo de Google. Contacte al Administrador.',
+      });
+    }
+
+    const user = rows[0];
+
+    if (!user.is_active) {
+      return res.status(403).json({ code: 'INFO', message: 'Usuario desactivado. Contacte al Administrador' });
+    }
+
+    await pool.query(
+      `UPDATE users SET last_session = NOW() WHERE id = $1`,
+      [user.id],
     );
 
     return res.json({

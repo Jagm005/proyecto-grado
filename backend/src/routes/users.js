@@ -24,16 +24,18 @@ router.get('/:id', async (req, res, next) => {
 });
 
 // POST /api/users
+// Acepta "password" (texto plano) y lo hashea con pgcrypto en el servidor.
 router.post('/', async (req, res, next) => {
-  const { id, username, full_name, email, password_hash, roles } = req.body;
-  if (!id || !username || !full_name || !email || !password_hash) {
+  const { id, username, full_name, email, password, roles, area } = req.body;
+  if (!id || !username || !full_name || !email || !password) {
     return res.status(400).json({ error: 'Faltan campos requeridos' });
   }
   try {
     const { rows } = await pool.query(
-      `INSERT INTO users (id, username, full_name, email, password_hash, roles)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [id, username, full_name, email, password_hash, roles ?? []]
+      `INSERT INTO users (id, username, full_name, email, password_hash, roles, area)
+       VALUES ($1, $2, $3, $4, crypt($5, gen_salt('bf')), $6, $7)
+       RETURNING id, username, full_name, email, roles, is_active, area`,
+      [id, username, full_name, email, password, roles ?? [], area ?? '']
     );
     res.status(201).json(rows[0]);
   } catch (err) { next(err); }
