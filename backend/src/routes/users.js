@@ -62,6 +62,23 @@ router.patch('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// PATCH /api/users/:id/password
+// Acepta "password" (texto plano) y actualiza el hash con pgcrypto.
+router.patch('/:id/password', async (req, res, next) => {
+  const { password } = req.body;
+  if (!password || typeof password !== 'string' || password.length < 1) {
+    return res.status(400).json({ error: 'Se requiere una contraseña válida' });
+  }
+  try {
+    const { rowCount } = await pool.query(
+      `UPDATE users SET password_hash = crypt($2, gen_salt('bf')) WHERE id = $1`,
+      [req.params.id, password]
+    );
+    if (!rowCount) return res.status(404).json({ error: 'Usuario no encontrado' });
+    res.status(204).end();
+  } catch (err) { next(err); }
+});
+
 // DELETE /api/users/:id
 router.delete('/:id', async (req, res, next) => {
   try {

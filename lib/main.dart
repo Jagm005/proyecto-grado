@@ -762,7 +762,7 @@ class AppState extends ChangeNotifier {
   /// Genera una contraseña aleatoria segura, la asigna al usuario y aprueba
   /// cualquier solicitud de reseteo pendiente para ese usuario.
   /// Retorna la nueva contraseña en texto plano para mostrársela al admin.
-  String adminResetPassword(AppUser user) {
+  Future<String> adminResetPassword(AppUser user) async {
     const chars =
         'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#\$%&*';
     final rng = Random.secure();
@@ -770,6 +770,17 @@ class AppState extends ChangeNotifier {
       10,
       (_) => chars[rng.nextInt(chars.length)],
     ).join();
+
+    if (authMode == AuthMode.institutional) {
+      await http
+          .patch(
+            Uri.parse('$_backendUrl/api/users/${user.id}/password'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'password': password}),
+          )
+          .timeout(const Duration(seconds: 10));
+    }
+
     user.password = password;
     // Marcar como aprobadas las solicitudes pendientes de ese usuario
     for (final n in notifications) {
@@ -838,23 +849,16 @@ class AppState extends ChangeNotifier {
   /// Retorna null si exitoso, o un mensaje de error con prefijo INFO:...
   Future<String?> loginWithGoogle() async {
     try {
-      debugPrint('[GOOGLE] Iniciando flujo. authMode=$authMode');
       final googleSignIn = GoogleSignIn(scopes: ['email']);
       // Desconectar sesion previa para forzar el selector de cuenta
       await googleSignIn.signOut();
-      debugPrint('[GOOGLE] signOut completado, abriendo selector...');
       final GoogleSignInAccount? account = await googleSignIn.signIn();
       if (account == null) {
-        debugPrint('[GOOGLE] Usuario canceló el selector');
         return 'INFO:Inicio de sesion con Google cancelado.';
       }
       final email = account.email;
-      debugPrint('[GOOGLE] Cuenta seleccionada: $email');
 
       if (authMode == AuthMode.institutional) {
-        debugPrint(
-          '[GOOGLE] Modo institucional → POST $_backendUrl/api/auth/google-login',
-        );
         final response = await http
             .post(
               Uri.parse('$_backendUrl/api/auth/google-login'),
@@ -862,10 +866,6 @@ class AppState extends ChangeNotifier {
               body: jsonEncode({'email': email}),
             )
             .timeout(const Duration(seconds: 10));
-
-        debugPrint(
-          '[GOOGLE] HTTP ${response.statusCode} — body: ${response.body}',
-        );
 
         if (!response.body.trimLeft().startsWith('{')) {
           return 'INFO:El servidor no responde correctamente. Cambie a modo local.';
@@ -875,7 +875,6 @@ class AppState extends ChangeNotifier {
 
         if (response.statusCode == 200) {
           final rawRoles = (body['roles'] as List).cast<String>();
-          debugPrint('[GOOGLE] Login exitoso. roles=$rawRoles');
           currentUser = AppUser(
             id: body['id'] as String,
             username: body['username'] as String,
@@ -892,35 +891,28 @@ class AppState extends ChangeNotifier {
         final message =
             (body['message'] ?? body['error']) as String? ??
             'Error desconocido';
-        debugPrint('[GOOGLE] Error del servidor: $message');
         return 'INFO:$message';
       }
 
       // Modo local: buscar por email en lista local
-      debugPrint(
-        '[GOOGLE] Modo local. Buscando email "$email" entre ${users.length} usuarios: ${users.map((u) => u.email).toList()}',
-      );
       final localUser = users
           .where((u) => u.email.toLowerCase() == email.toLowerCase())
           .firstOrNull;
       if (localUser == null) {
-        debugPrint('[GOOGLE] Email no encontrado en lista local');
         return 'INFO:No existe un usuario registrado con este correo de Google.';
       }
       if (!localUser.isActive) {
-        debugPrint('[GOOGLE] Usuario desactivado: ${localUser.username}');
         return 'INFO:Usuario desactivado. Contacte al Administrador';
       }
-      debugPrint('[GOOGLE] Login local exitoso: ${localUser.username}');
       localUser.lastSession = DateTime.now();
       currentUser = localUser;
       notifyListeners();
       return null;
     } on http.ClientException catch (e) {
-      debugPrint('[GOOGLE] ClientException: $e');
+      debugPrint('Google login ClientException: $e');
       return 'INFO:No se pudo conectar al servidor.';
     } catch (e) {
-      debugPrint('[GOOGLE] Exception inesperada: $e');
+      debugPrint('Google login error: $e');
       return 'INFO:Error al iniciar sesion con Google: $e';
     }
   }
@@ -1319,22 +1311,6 @@ class _LoginPageState extends State<LoginPage> {
     if (!mounted) return;
     setState(() => _isLoading = false);
     if (raw == null) return; // exitoso
-
-    // DEBUG TEMPORAL: mostrar respuesta cruda en pantalla
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('DEBUG Google Login'),
-        content: SelectableText('Respuesta raw:\n$raw'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
-
     final parts = raw.split(':');
     final prefix = parts[0];
     final payload = parts.length > 1 ? parts.sublist(1).join(':') : '';
@@ -2066,7 +2042,7 @@ class _UsersPageState extends State<UsersPage> {
     );
     if (confirm != true) return;
     if (!mounted) return;
-    final newPassword = widget.state.adminResetPassword(user);
+    final newPassword = await widget.state.adminResetPassword(user);
     if (!mounted) return;
     await showDialog<void>(
       context: context,
@@ -3372,7 +3348,7 @@ class NotificationsPage extends StatelessWidget {
               state.denyNotification(notif);
               return;
             }
-            final newPassword = state.adminResetPassword(user);
+            final newPassword = await state.adminResetPassword(user);
             if (!context.mounted) return;
             await showDialog<void>(
               context: context,
