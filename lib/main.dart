@@ -6,13 +6,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:postgres/postgres.dart';
+import 'package:image_picker/image_picker.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -143,36 +142,6 @@ extension AssetStateX on AssetState {
   }
 }
 
-enum VerificationResult {
-  encontrado,
-  reubicado,
-  noEncontrado,
-  paraBaja,
-  obsoleto,
-  enReparacion,
-}
-
-extension VerificationResultX on VerificationResult {
-  String get label {
-    switch (this) {
-      case VerificationResult.encontrado:
-        return 'Encontrado';
-      case VerificationResult.reubicado:
-        return 'Reubicado';
-      case VerificationResult.noEncontrado:
-        return 'No Encontrado';
-      case VerificationResult.paraBaja:
-        return 'Para Baja';
-      case VerificationResult.obsoleto:
-        return 'Obsoleto';
-      case VerificationResult.enReparacion:
-        return 'En Reparacion';
-    }
-  }
-}
-
-enum MaintenanceType { preventivo, correctivo }
-
 enum ReportPeriod { mensual, semestral, anual }
 
 class AppUser {
@@ -284,6 +253,7 @@ class Asset {
     required this.observations,
     required this.program,
     List<AssetHistoryEvent>? history,
+    this.photoBase64,
   }) : history = history ?? [];
 
   final String code;
@@ -301,6 +271,7 @@ class Asset {
   AssetState state;
   String observations;
   String program;
+  String? photoBase64;
   final List<AssetHistoryEvent> history;
 
   Map<String, dynamic> toJson() => {
@@ -319,6 +290,7 @@ class Asset {
     'state': state.name,
     'observations': observations,
     'program': program,
+    'photoBase64': photoBase64,
     'history': history.map((h) => h.toJson()).toList(),
   };
 
@@ -338,214 +310,13 @@ class Asset {
     state: AssetState.values.byName(j['state'] as String),
     observations: j['observations'] as String,
     program: j['program'] as String,
+    photoBase64: j['photoBase64'] as String?,
     history:
         (j['history'] as List?)
             ?.map((h) => AssetHistoryEvent.fromJson(h as Map<String, dynamic>))
             .toList() ??
         [],
   );
-}
-
-class InventoryVerification {
-  InventoryVerification({
-    required this.assetCode,
-    required this.result,
-    required this.notes,
-    required this.timestamp,
-    this.photoPath,
-  });
-
-  final String assetCode;
-  final VerificationResult result;
-  final String notes;
-  final DateTime timestamp;
-  final String? photoPath;
-
-  Map<String, dynamic> toJson() => {
-    'assetCode': assetCode,
-    'result': result.name,
-    'notes': notes,
-    'timestamp': timestamp.toIso8601String(),
-    'photoPath': photoPath,
-  };
-
-  factory InventoryVerification.fromJson(Map<String, dynamic> j) =>
-      InventoryVerification(
-        assetCode: j['assetCode'] as String,
-        result: VerificationResult.values.byName(j['result'] as String),
-        notes: j['notes'] as String,
-        timestamp: DateTime.parse(j['timestamp'] as String),
-        photoPath: j['photoPath'] as String?,
-      );
-}
-
-class InventorySession {
-  InventorySession({
-    required this.id,
-    required this.name,
-    required this.site,
-    required this.building,
-    required this.floor,
-    required this.area,
-    required this.createdAt,
-    required this.baselineStates,
-  });
-
-  final String id;
-  final String name;
-  final String site;
-  final String building;
-  final String floor;
-  final String area;
-  final DateTime createdAt;
-  final Map<String, AssetState> baselineStates;
-  final List<InventoryVerification> verifications = [];
-
-  Map<String, dynamic> toJson() => {
-    'id': id,
-    'name': name,
-    'site': site,
-    'building': building,
-    'floor': floor,
-    'area': area,
-    'createdAt': createdAt.toIso8601String(),
-    'baselineStates': baselineStates.map((k, v) => MapEntry(k, v.name)),
-    'verifications': verifications.map((v) => v.toJson()).toList(),
-  };
-
-  factory InventorySession.fromJson(Map<String, dynamic> j) {
-    final s = InventorySession(
-      id: j['id'] as String,
-      name: j['name'] as String,
-      site: j['site'] as String,
-      building: j['building'] as String,
-      floor: j['floor'] as String,
-      area: j['area'] as String,
-      createdAt: DateTime.parse(j['createdAt'] as String),
-      baselineStates: (j['baselineStates'] as Map<String, dynamic>).map(
-        (k, v) => MapEntry(k, AssetState.values.byName(v as String)),
-      ),
-    );
-    for (final v in (j['verifications'] as List? ?? [])) {
-      s.verifications.add(
-        InventoryVerification.fromJson(v as Map<String, dynamic>),
-      );
-    }
-    return s;
-  }
-}
-
-class MaintenanceRequest {
-  MaintenanceRequest({
-    required this.id,
-    required this.assetCode,
-    required this.type,
-    required this.description,
-    required this.createdBy,
-    required this.createdAt,
-  });
-
-  final String id;
-  final String assetCode;
-  final MaintenanceType type;
-  final String description;
-  final String createdBy;
-  final DateTime createdAt;
-  bool closed = false;
-
-  Map<String, dynamic> toJson() => {
-    'id': id,
-    'assetCode': assetCode,
-    'type': type.name,
-    'description': description,
-    'createdBy': createdBy,
-    'createdAt': createdAt.toIso8601String(),
-    'closed': closed,
-  };
-
-  factory MaintenanceRequest.fromJson(Map<String, dynamic> j) {
-    final r = MaintenanceRequest(
-      id: j['id'] as String,
-      assetCode: j['assetCode'] as String,
-      type: MaintenanceType.values.byName(j['type'] as String),
-      description: j['description'] as String,
-      createdBy: j['createdBy'] as String,
-      createdAt: DateTime.parse(j['createdAt'] as String),
-    );
-    r.closed = j['closed'] as bool;
-    return r;
-  }
-}
-
-class DisposalRequest {
-  DisposalRequest({
-    required this.id,
-    required this.assetCode,
-    required this.cause,
-    required this.justification,
-    required this.createdBy,
-    required this.createdAt,
-  });
-
-  final String id;
-  final String assetCode;
-  final String cause;
-  final String justification;
-  final String createdBy;
-  final DateTime createdAt;
-  bool approvedByDependency = false;
-  bool approvedByDAF = false;
-
-  String get status {
-    if (approvedByDependency && approvedByDAF) {
-      return 'Aprobada';
-    }
-    if (approvedByDependency || approvedByDAF) {
-      return 'En aprobacion';
-    }
-    return 'Pendiente';
-  }
-
-  Map<String, dynamic> toJson() => {
-    'id': id,
-    'assetCode': assetCode,
-    'cause': cause,
-    'justification': justification,
-    'createdBy': createdBy,
-    'createdAt': createdAt.toIso8601String(),
-    'approvedByDependency': approvedByDependency,
-    'approvedByDAF': approvedByDAF,
-  };
-
-  factory DisposalRequest.fromJson(Map<String, dynamic> j) {
-    final r = DisposalRequest(
-      id: j['id'] as String,
-      assetCode: j['assetCode'] as String,
-      cause: j['cause'] as String,
-      justification: j['justification'] as String,
-      createdBy: j['createdBy'] as String,
-      createdAt: DateTime.parse(j['createdAt'] as String),
-    );
-    r.approvedByDependency = j['approvedByDependency'] as bool;
-    r.approvedByDAF = j['approvedByDAF'] as bool;
-    return r;
-  }
-}
-
-class PostgresConfig {
-  PostgresConfig({
-    this.host = 'localhost',
-    this.port = 5432,
-    this.database = 'inventario',
-    this.username = 'postgres',
-    this.password = 'postgres',
-  });
-
-  String host;
-  int port;
-  String database;
-  String username;
-  String password;
 }
 
 // ── Notificaciones ────────────────────────────────────────────────────────────
@@ -567,7 +338,7 @@ class AppNotification {
   });
 
   final String id;
-  final String type; // 'maintenance' | 'disposal' | 'info' | 'missing_asset'
+  final String type; // 'disposal' | 'info' | 'missing_asset'
   final String title;
   final String body;
   final DateTime createdAt;
@@ -611,11 +382,7 @@ class AppNotification {
 class AppState extends ChangeNotifier {
   final List<AppUser> users = [];
   final List<Asset> assets = [];
-  final List<InventorySession> inventorySessions = [];
-  final List<MaintenanceRequest> maintenanceRequests = [];
-  final List<DisposalRequest> disposalRequests = [];
   final List<AppNotification> notifications = [];
-  final PostgresConfig postgresConfig = PostgresConfig();
 
   AppUser? currentUser;
   AuthMode authMode = AuthMode.institutional;
@@ -665,36 +432,6 @@ class AppState extends ChangeNotifier {
       }
     }
 
-    final sessionsData = prefs.getString('inventorySessions');
-    if (sessionsData != null) {
-      inventorySessions.clear();
-      for (final j in jsonDecode(sessionsData) as List) {
-        inventorySessions.add(
-          InventorySession.fromJson(j as Map<String, dynamic>),
-        );
-      }
-    }
-
-    final maintData = prefs.getString('maintenanceRequests');
-    if (maintData != null) {
-      maintenanceRequests.clear();
-      for (final j in jsonDecode(maintData) as List) {
-        maintenanceRequests.add(
-          MaintenanceRequest.fromJson(j as Map<String, dynamic>),
-        );
-      }
-    }
-
-    final disposalData = prefs.getString('disposalRequests');
-    if (disposalData != null) {
-      disposalRequests.clear();
-      for (final j in jsonDecode(disposalData) as List) {
-        disposalRequests.add(
-          DisposalRequest.fromJson(j as Map<String, dynamic>),
-        );
-      }
-    }
-
     final notifData = prefs.getString('notifications');
     if (notifData != null) {
       notifications.clear();
@@ -717,18 +454,6 @@ class AppState extends ChangeNotifier {
     await prefs.setString(
       'assets',
       jsonEncode(assets.map((a) => a.toJson()).toList()),
-    );
-    await prefs.setString(
-      'inventorySessions',
-      jsonEncode(inventorySessions.map((s) => s.toJson()).toList()),
-    );
-    await prefs.setString(
-      'maintenanceRequests',
-      jsonEncode(maintenanceRequests.map((m) => m.toJson()).toList()),
-    );
-    await prefs.setString(
-      'disposalRequests',
-      jsonEncode(disposalRequests.map((d) => d.toJson()).toList()),
     );
     await prefs.setString(
       'notifications',
@@ -853,8 +578,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool canApproveDisposals() =>
-      hasRole(UserRole.direccionAdminFin) || hasRole(UserRole.responsableArea);
+  bool canApproveDisposals() => false; // feature removed
 
   void setAuthMode(AuthMode mode) {
     authMode = mode;
@@ -882,7 +606,7 @@ class AppState extends ChangeNotifier {
   /// --dart-define=BACKEND_URL=http://10.0.2.2:3000  (Android emulador)
   static const _backendUrl = String.fromEnvironment(
     'BACKEND_URL',
-    defaultValue: 'http://3.22.221.113:3000',
+    defaultValue: 'http://18.223.120.46:3000',
   );
 
   /// Retorna null si el login fue exitoso.
@@ -1092,121 +816,6 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
-  InventorySession createInventorySession({
-    required String name,
-    required String site,
-    required String building,
-    required String floor,
-    required String area,
-  }) {
-    final baseline = <String, AssetState>{};
-    for (final a in assets) {
-      baseline[a.code] = a.state;
-    }
-    final session = InventorySession(
-      id: 'INV-${inventorySessions.length + 1}',
-      name: name,
-      site: site,
-      building: building,
-      floor: floor,
-      area: area,
-      createdAt: DateTime.now(),
-      baselineStates: baseline,
-    );
-    inventorySessions.add(session);
-    notifyListeners();
-    return session;
-  }
-
-  void registerVerification({
-    required InventorySession session,
-    required String assetCode,
-    required VerificationResult result,
-    required String notes,
-    String? photoPath,
-  }) {
-    final verification = InventoryVerification(
-      assetCode: assetCode,
-      result: result,
-      notes: notes,
-      timestamp: DateTime.now(),
-      photoPath: photoPath,
-    );
-    session.verifications.add(verification);
-
-    final asset = findAsset(assetCode);
-    if (asset != null) {
-      updateAsset(
-        asset,
-        performedBy: currentUser?.username ?? 'system',
-        newState: _assetStateFromVerification(result),
-        notes: notes,
-      );
-    }
-    notifyListeners();
-  }
-
-  AssetState _assetStateFromVerification(VerificationResult result) {
-    switch (result) {
-      case VerificationResult.encontrado:
-        return AssetState.activo;
-      case VerificationResult.reubicado:
-        return AssetState.reubicado;
-      case VerificationResult.noEncontrado:
-        return AssetState.noEncontrado;
-      case VerificationResult.paraBaja:
-        return AssetState.paraBaja;
-      case VerificationResult.obsoleto:
-        return AssetState.obsoleto;
-      case VerificationResult.enReparacion:
-        return AssetState.enReparacion;
-    }
-  }
-
-  void createMaintenance({
-    required String assetCode,
-    required MaintenanceType type,
-    required String description,
-  }) {
-    final id = 'MNT-${maintenanceRequests.length + 1}';
-    maintenanceRequests.add(
-      MaintenanceRequest(
-        id: id,
-        assetCode: assetCode,
-        type: type,
-        description: description,
-        createdBy: currentUser?.username ?? 'system',
-        createdAt: DateTime.now(),
-      ),
-    );
-
-    // Generar notificacion para administradores
-    final user = currentUser;
-    final asset = findAsset(assetCode);
-    notifications.add(
-      AppNotification(
-        id: 'NOTIF-${notifications.length + 1}',
-        type: 'maintenance',
-        title: 'Solicitud de mantenimiento',
-        body:
-            'Activo: ${asset?.name ?? assetCode}\n'
-            'Tipo: ${type.name}\n'
-            'Descripcion: $description\n'
-            'Solicitante: ${user?.fullName ?? 'Desconocido'} '
-            '(${user?.area ?? ''}) · ${user?.email ?? ''}',
-        createdAt: DateTime.now(),
-        fromUser: user?.username ?? 'system',
-        relatedId: id,
-      ),
-    );
-    notifyListeners();
-  }
-
-  void closeMaintenance(MaintenanceRequest req) {
-    req.closed = true;
-    notifyListeners();
-  }
-
   void markNotificationRead(AppNotification n) {
     n.read = true;
     notifyListeners();
@@ -1222,10 +831,6 @@ class AppState extends ChangeNotifier {
   void approveNotification(AppNotification n) {
     n.status = NotificationStatus.aprobada;
     n.read = true;
-    if (n.type == 'maintenance') {
-      // ya queda registrada la aprobacion en la notificacion misma
-      maintenanceRequests.where((r) => r.id == n.relatedId).firstOrNull;
-    }
     notifyListeners();
   }
 
@@ -1233,51 +838,6 @@ class AppState extends ChangeNotifier {
     n.status = NotificationStatus.denegada;
     n.read = true;
     notifyListeners();
-  }
-
-  void createDisposal({
-    required String assetCode,
-    required String cause,
-    required String justification,
-  }) {
-    disposalRequests.add(
-      DisposalRequest(
-        id: 'DSP-${disposalRequests.length + 1}',
-        assetCode: assetCode,
-        cause: cause,
-        justification: justification,
-        createdBy: currentUser?.username ?? 'system',
-        createdAt: DateTime.now(),
-      ),
-    );
-    notifyListeners();
-  }
-
-  void approveDisposalByDependency(DisposalRequest req) {
-    req.approvedByDependency = true;
-    _markAssetAsDisposedIfFullyApproved(req);
-    notifyListeners();
-  }
-
-  void approveDisposalByDAF(DisposalRequest req) {
-    req.approvedByDAF = true;
-    _markAssetAsDisposedIfFullyApproved(req);
-    notifyListeners();
-  }
-
-  void _markAssetAsDisposedIfFullyApproved(DisposalRequest req) {
-    if (!(req.approvedByDependency && req.approvedByDAF)) {
-      return;
-    }
-    final asset = findAsset(req.assetCode);
-    if (asset != null) {
-      updateAsset(
-        asset,
-        performedBy: currentUser?.username ?? 'system',
-        newState: AssetState.paraBaja,
-        notes: 'Baja aprobada: ${req.cause}',
-      );
-    }
   }
 
   List<Asset> reportFilteredAssets({
@@ -1359,21 +919,6 @@ class AppState extends ChangeNotifier {
     return max(0, asset.acquisitionValue - depreciation);
   }
 
-  String comparativeReport(InventorySession session) {
-    final rows = <String>[];
-    for (final asset in assets) {
-      final before = session.baselineStates[asset.code]?.label ?? 'Sin dato';
-      final after = asset.state.label;
-      if (before != after) {
-        rows.add('${asset.code}: $before -> $after');
-      }
-    }
-    if (rows.isEmpty) {
-      return 'No hay cambios entre el estado previo y posterior.';
-    }
-    return rows.join('\n');
-  }
-
   String generateCsv(List<Asset> reportAssets) {
     final buffer = StringBuffer();
     buffer.writeln(
@@ -1433,25 +978,6 @@ class AppState extends ChangeNotifier {
     return doc.save();
   }
 
-  Future<String> testPostgresConnection() async {
-    PostgreSQLConnection? conn;
-    try {
-      conn = PostgreSQLConnection(
-        postgresConfig.host,
-        postgresConfig.port,
-        postgresConfig.database,
-        username: postgresConfig.username,
-        password: postgresConfig.password,
-      );
-      await conn.open();
-      final result = await conn.query('SELECT NOW()');
-      return 'Conexion exitosa. Hora servidor: ${result.first.first}';
-    } catch (e) {
-      return 'Error de conexion: $e';
-    } finally {
-      await conn?.close();
-    }
-  }
 }
 
 class LoginPage extends StatefulWidget {
@@ -1849,27 +1375,6 @@ class _HomePageState extends State<HomePage> {
                 s.hasRole(UserRole.direccionAdminFin),
           ),
           (
-            page: InventoryPage(state: s),
-            icon: const Icon(Icons.fact_check_outlined),
-            selectedIcon: const Icon(Icons.fact_check),
-            label: 'Inventario',
-            allowed:
-                s.hasRole(UserRole.auxiliarInventario) ||
-                s.hasRole(UserRole.administrador) ||
-                s.hasRole(UserRole.auditor),
-          ),
-          (
-            page: MaintenancePage(state: s),
-            icon: const Icon(Icons.build_outlined),
-            selectedIcon: const Icon(Icons.build),
-            label: 'Manto/Bajas',
-            allowed:
-                s.hasRole(UserRole.auxiliarInventario) ||
-                s.hasRole(UserRole.administrador) ||
-                s.hasRole(UserRole.responsableArea) ||
-                s.hasRole(UserRole.direccionAdminFin),
-          ),
-          (
             page: ReportsPage(state: s),
             icon: const Icon(Icons.assessment_outlined),
             selectedIcon: const Icon(Icons.assessment),
@@ -1879,15 +1384,6 @@ class _HomePageState extends State<HomePage> {
                 s.hasRole(UserRole.auditor) ||
                 s.hasRole(UserRole.direccionAdminFin) ||
                 s.hasRole(UserRole.responsableArea),
-          ),
-          (
-            page: IntegrationPage(state: s),
-            icon: const Icon(Icons.storage_outlined),
-            selectedIcon: const Icon(Icons.storage),
-            label: 'PostgreSQL',
-            allowed:
-                s.hasRole(UserRole.administrador) ||
-                s.hasRole(UserRole.soporteTI),
           ),
           (
             page: NotificationsPage(state: s),
@@ -1992,24 +1488,6 @@ class DashboardPage extends StatelessWidget {
               state.assets.length.toString(),
               Icons.inventory_2_outlined,
               const Color(0xFF00804E),
-            ),
-            _metricCard(
-              'Mantenimientos',
-              state.maintenanceRequests.length.toString(),
-              Icons.build_outlined,
-              const Color(0xFFE65100),
-            ),
-            _metricCard(
-              'Bajas',
-              state.disposalRequests.length.toString(),
-              Icons.delete_sweep_outlined,
-              const Color(0xFFC62828),
-            ),
-            _metricCard(
-              'Jornadas',
-              state.inventorySessions.length.toString(),
-              Icons.fact_check_outlined,
-              const Color(0xFF6A1B9A),
             ),
             _metricCard(
               'Usuarios',
@@ -2599,18 +2077,17 @@ class _AssetsPageState extends State<AssetsPage> {
       padding: const EdgeInsets.all(16),
       child: Column(
         children: [
+          TextField(
+            controller: _searchController,
+            decoration: const InputDecoration(
+              labelText: 'Buscar activo por codigo o nombre',
+              prefixIcon: Icon(Icons.search),
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 12),
           Row(
             children: [
-              Expanded(
-                child: TextField(
-                  controller: _searchController,
-                  decoration: const InputDecoration(
-                    labelText: 'Buscar activo por codigo o nombre',
-                  ),
-                  onChanged: (_) => setState(() {}),
-                ),
-              ),
-              const SizedBox(width: 12),
               if (widget.state.canManageAssets())
                 FilledButton.icon(
                   onPressed: () => _createAssetDialog(context),
@@ -2644,6 +2121,33 @@ class _AssetsPageState extends State<AssetsPage> {
                           'Dependencia: ${asset.dependency} | Programa: ${asset.program}\nValor: ${asset.acquisitionValue.toStringAsFixed(0)}',
                         ),
                       ),
+                      if (asset.photoBase64 != null)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Foto del activo',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.black54,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(10),
+                                child: Image.memory(
+                                  base64Decode(asset.photoBase64!),
+                                  width: double.infinity,
+                                  height: 200,
+                                  fit: BoxFit.cover,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       Wrap(
                         spacing: 8,
                         children: [
@@ -2726,10 +2230,30 @@ class _AssetsPageState extends State<AssetsPage> {
       builder: (dialogContext) {
         String? errorMsg;
         AppUser? selectedResponsible;
+        Uint8List? capturedPhotoBytes;
+
+        Future<void> pickPhoto(
+          ImageSource source,
+          StateSetter setLocal,
+        ) async {
+          try {
+            final picker = ImagePicker();
+            final photo = await picker.pickImage(
+              source: source,
+              imageQuality: 72,
+              maxWidth: 1200,
+            );
+            if (photo != null) {
+              final bytes = await photo.readAsBytes();
+              setLocal(() => capturedPhotoBytes = bytes);
+            }
+          } catch (_) {}
+        }
+
         return StatefulBuilder(
           builder: (dialogContext, setLocal) {
             return AlertDialog(
-              title: const Text('Registrar activo (manual)'),
+              title: const Text('Registrar activo'),
               content: SizedBox(
                 width: 450,
                 child: SingleChildScrollView(
@@ -2809,6 +2333,109 @@ class _AssetsPageState extends State<AssetsPage> {
                       _field(value, 'Valor adquisicion'),
                       _field(usefulLife, 'Vida util (anios)'),
                       _field(observations, 'Observaciones'),
+                      const SizedBox(height: 8),
+                      // ── Foto del activo ───────────────────────────────────
+                      GestureDetector(
+                        onTap: () {
+                          showDialog<void>(
+                            context: dialogContext,
+                            builder: (ctx) => SimpleDialog(
+                              title: const Text('Agregar foto'),
+                              children: [
+                                SimpleDialogOption(
+                                  onPressed: () {
+                                    Navigator.pop(ctx);
+                                    pickPhoto(ImageSource.camera, setLocal);
+                                  },
+                                  child: const Row(
+                                    children: [
+                                      Icon(Icons.camera_alt_outlined),
+                                      SizedBox(width: 10),
+                                      Text('Tomar foto'),
+                                    ],
+                                  ),
+                                ),
+                                SimpleDialogOption(
+                                  onPressed: () {
+                                    Navigator.pop(ctx);
+                                    pickPhoto(ImageSource.gallery, setLocal);
+                                  },
+                                  child: const Row(
+                                    children: [
+                                      Icon(Icons.photo_library_outlined),
+                                      SizedBox(width: 10),
+                                      Text('Seleccionar de galería'),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                        child: Container(
+                          width: double.infinity,
+                          height: capturedPhotoBytes != null ? 180 : 100,
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade100,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: const Color(0xFF00804E).withValues(
+                                alpha: 0.4,
+                              ),
+                              style: BorderStyle.solid,
+                            ),
+                          ),
+                          clipBehavior: Clip.antiAlias,
+                          child: capturedPhotoBytes != null
+                              ? Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    Image.memory(
+                                      capturedPhotoBytes!,
+                                      fit: BoxFit.cover,
+                                    ),
+                                    Positioned(
+                                      top: 6,
+                                      right: 6,
+                                      child: CircleAvatar(
+                                        radius: 14,
+                                        backgroundColor: Colors.black54,
+                                        child: IconButton(
+                                          padding: EdgeInsets.zero,
+                                          icon: const Icon(
+                                            Icons.close,
+                                            size: 14,
+                                            color: Colors.white,
+                                          ),
+                                          onPressed: () => setLocal(
+                                            () => capturedPhotoBytes = null,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                )
+                              : Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      Icons.add_a_photo_outlined,
+                                      size: 32,
+                                      color: const Color(0xFF00804E)
+                                          .withValues(alpha: 0.6),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      'Agregar foto del activo (opcional)',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey.shade500,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -2858,6 +2485,9 @@ class _AssetsPageState extends State<AssetsPage> {
                         state: AssetState.activo,
                         observations: observations.text.trim(),
                         program: program.text.trim(),
+                        photoBase64: capturedPhotoBytes != null
+                            ? base64Encode(capturedPhotoBytes!)
+                            : null,
                       ),
                       performedBy:
                           widget.state.currentUser?.username ?? 'system',
@@ -2996,43 +2626,14 @@ class _AssetsPageState extends State<AssetsPage> {
       return;
     }
 
-    String? scannedCode;
-    await showDialog<void>(
-      context: context,
-      builder: (context) {
-        bool handled = false;
-        return AlertDialog(
-          title: const Text('Escanear codigo de barras'),
-          content: SizedBox(
-            width: 320,
-            height: 320,
-            child: MobileScanner(
-              onDetect: (capture) {
-                if (handled) {
-                  return;
-                }
-                final code = capture.barcodes.first.rawValue;
-                if (code != null && code.isNotEmpty) {
-                  handled = true;
-                  scannedCode = code;
-                  Navigator.pop(context);
-                }
-              },
-            ),
-          ),
-        );
-      },
+    final scannedCode = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(builder: (_) => ScanPage(state: widget.state)),
     );
 
-    if (scannedCode == null) {
-      return;
-    }
+    if (scannedCode == null || !context.mounted) return;
 
-    if (!context.mounted) {
-      return;
-    }
-
-    final asset = widget.state.findAsset(scannedCode!);
+    final asset = widget.state.findAsset(scannedCode);
     if (asset == null) {
       if (!context.mounted) return;
       if (widget.state.canManageAssets()) {
@@ -3044,7 +2645,6 @@ class _AssetsPageState extends State<AssetsPage> {
           ),
         );
       } else {
-        // Roles de solo lectura: ofrecer reportar activo inexistente
         final notesCtrl = TextEditingController();
         final confirm = await showDialog<bool>(
           context: context,
@@ -3083,7 +2683,7 @@ class _AssetsPageState extends State<AssetsPage> {
         );
         if (confirm == true) {
           widget.state.reportMissingAsset(
-            scannedCode: scannedCode!,
+            scannedCode: scannedCode,
             notes: notesCtrl.text.trim(),
           );
           if (context.mounted) {
@@ -3098,710 +2698,18 @@ class _AssetsPageState extends State<AssetsPage> {
       return;
     }
 
-    if (!context.mounted) {
-      return;
-    }
+    if (!context.mounted) return;
 
-    await showDialog<void>(
+    await showModalBottomSheet<void>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Activo encontrado'),
-        content: Text(
-          '${asset.code}\n${asset.name}\n${asset.state.label}\n${asset.physicalLocation}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Aceptar'),
-          ),
-        ],
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-    );
-  }
-}
-
-class InventoryPage extends StatefulWidget {
-  const InventoryPage({super.key, required this.state});
-
-  final AppState state;
-
-  @override
-  State<InventoryPage> createState() => _InventoryPageState();
-}
-
-class _InventoryPageState extends State<InventoryPage> {
-  InventorySession? selectedSession;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              FilledButton.icon(
-                onPressed: () => _createSessionDialog(context),
-                icon: const Icon(Icons.add_task),
-                label: const Text('Crear jornada inventario'),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: DropdownButtonFormField<InventorySession>(
-                  value: selectedSession,
-                  items: widget.state.inventorySessions
-                      .map(
-                        (s) => DropdownMenuItem<InventorySession>(
-                          value: s,
-                          child: Text(
-                            '${s.id} - ${s.name} (${s.site}/${s.area})',
-                          ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) => setState(() => selectedSession = value),
-                  decoration: const InputDecoration(
-                    labelText: 'Jornada activa',
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          if (selectedSession != null)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Wrap(
-                spacing: 8,
-                children: [
-                  FilledButton(
-                    onPressed: () =>
-                        _registerVerification(context, selectedSession!),
-                    child: const Text('Registrar verificacion'),
-                  ),
-                  OutlinedButton(
-                    onPressed: () async {
-                      final comparative = widget.state.comparativeReport(
-                        selectedSession!,
-                      );
-                      await showDialog<void>(
-                        context: context,
-                        builder: (context) => AlertDialog(
-                          title: const Text('Comparativo previo/posterior'),
-                          content: SingleChildScrollView(
-                            child: Text(comparative),
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(context),
-                              child: const Text('Cerrar'),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                    child: const Text('Reporte comparativo'),
-                  ),
-                ],
-              ),
-            ),
-          const SizedBox(height: 12),
-          Expanded(
-            child: ListView(
-              children: [
-                if (selectedSession == null)
-                  const Card(
-                    child: ListTile(
-                      title: Text(
-                        'Cree o seleccione una jornada para verificar activos.',
-                      ),
-                    ),
-                  ),
-                if (selectedSession != null)
-                  ...selectedSession!.verifications.map(
-                    (v) => Card(
-                      child: ListTile(
-                        title: Text('${v.assetCode} - ${v.result.label}'),
-                        subtitle: Text(
-                          '${DateFormat('yyyy-MM-dd HH:mm').format(v.timestamp)}\n${v.notes}\nEvidencia: ${v.photoPath ?? 'No adjunta'}',
-                        ),
-                        isThreeLine: true,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ],
+      builder: (ctx) => _AssetScanResultSheet(
+        asset: asset,
+        state: widget.state,
       ),
-    );
-  }
-
-  Future<void> _createSessionDialog(BuildContext context) async {
-    final name = TextEditingController();
-    final site = TextEditingController();
-    final building = TextEditingController();
-    final floor = TextEditingController();
-    final area = TextEditingController();
-
-    await showDialog<void>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Nueva jornada inventario fisico'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: name,
-                decoration: const InputDecoration(labelText: 'Nombre jornada'),
-              ),
-              TextField(
-                controller: site,
-                decoration: const InputDecoration(labelText: 'Sede'),
-              ),
-              TextField(
-                controller: building,
-                decoration: const InputDecoration(labelText: 'Edificio'),
-              ),
-              TextField(
-                controller: floor,
-                decoration: const InputDecoration(labelText: 'Piso'),
-              ),
-              TextField(
-                controller: area,
-                decoration: const InputDecoration(
-                  labelText: 'Area/dependencia',
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancelar'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final session = widget.state.createInventorySession(
-                  name: name.text,
-                  site: site.text,
-                  building: building.text,
-                  floor: floor.text,
-                  area: area.text,
-                );
-                setState(() => selectedSession = session);
-                Navigator.pop(context);
-              },
-              child: const Text('Crear'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _registerVerification(
-    BuildContext context,
-    InventorySession session,
-  ) async {
-    final code = TextEditingController();
-    final notes = TextEditingController();
-    VerificationResult result = VerificationResult.encontrado;
-    String? photoPath;
-
-    await showDialog<void>(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setLocal) {
-            return AlertDialog(
-              title: const Text('Registrar verificacion por activo'),
-              content: SizedBox(
-                width: 420,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextField(
-                      controller: code,
-                      decoration: const InputDecoration(
-                        labelText: 'Codigo activo',
-                      ),
-                    ),
-                    DropdownButtonFormField<VerificationResult>(
-                      value: result,
-                      items: VerificationResult.values
-                          .map(
-                            (r) => DropdownMenuItem<VerificationResult>(
-                              value: r,
-                              child: Text(r.label),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (v) {
-                        if (v != null) {
-                          setLocal(() => result = v);
-                        }
-                      },
-                      decoration: const InputDecoration(labelText: 'Resultado'),
-                    ),
-                    TextField(
-                      controller: notes,
-                      decoration: const InputDecoration(labelText: 'Notas'),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        OutlinedButton(
-                          onPressed: () async {
-                            final picked = await ImagePicker().pickImage(
-                              source: ImageSource.camera,
-                            );
-                            if (picked != null) {
-                              setLocal(() => photoPath = picked.path);
-                            }
-                          },
-                          child: const Text('Adjuntar foto (opcional)'),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(child: Text(photoPath ?? 'Sin evidencia')),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancelar'),
-                ),
-                FilledButton(
-                  onPressed: () {
-                    final asset = widget.state.findAsset(code.text.trim());
-                    if (asset == null) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'Activo no existe en inventario. Registrelo manualmente en Activos.',
-                          ),
-                        ),
-                      );
-                      return;
-                    }
-                    widget.state.registerVerification(
-                      session: session,
-                      assetCode: code.text.trim(),
-                      result: result,
-                      notes: notes.text,
-                      photoPath: photoPath,
-                    );
-                    Navigator.pop(context);
-                  },
-                  child: const Text('Guardar verificacion'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-}
-
-class MaintenancePage extends StatefulWidget {
-  const MaintenancePage({super.key, required this.state});
-
-  final AppState state;
-
-  @override
-  State<MaintenancePage> createState() => _MaintenancePageState();
-}
-
-class _MaintenancePageState extends State<MaintenancePage> {
-  @override
-  Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 2,
-      child: Column(
-        children: [
-          TabBar(
-            tabs: const [
-              Tab(icon: Icon(Icons.build_outlined), text: 'Mantenimientos'),
-              Tab(
-                icon: Icon(Icons.delete_sweep_outlined),
-                text: 'Bajas de activos',
-              ),
-            ],
-          ),
-          Expanded(
-            child: TabBarView(
-              children: [
-                // ── Tab 1: Mantenimientos ──────────────────────────
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    children: [
-                      Row(
-                        children: [
-                          Text(
-                            'Mantenimientos',
-                            style: Theme.of(context).textTheme.titleMedium
-                                ?.copyWith(fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(width: 12),
-                          FilledButton.icon(
-                            onPressed: () => _newMaintenanceDialog(context),
-                            icon: const Icon(Icons.add, size: 18),
-                            label: const Text('Solicitar'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      Expanded(
-                        child: ListView(
-                          children: widget.state.maintenanceRequests
-                              .map(
-                                (m) => Card(
-                                  child: ListTile(
-                                    leading: Icon(
-                                      m.closed
-                                          ? Icons.check_circle_outline
-                                          : Icons.build_circle_outlined,
-                                      color: m.closed
-                                          ? Colors.green
-                                          : Colors.orange,
-                                    ),
-                                    title: Text(
-                                      '${m.assetCode} · ${m.type.name}',
-                                    ),
-                                    subtitle: Text(
-                                      '${m.description}\n${m.id} · ${m.closed ? 'Cerrado' : 'Abierto'}',
-                                    ),
-                                    trailing: m.closed
-                                        ? null
-                                        : OutlinedButton(
-                                            onPressed: () => widget.state
-                                                .closeMaintenance(m),
-                                            child: const Text('Cerrar'),
-                                          ),
-                                    isThreeLine: true,
-                                  ),
-                                ),
-                              )
-                              .toList(),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                // ── Tab 2: Bajas ────────────────────────────────────
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    children: [
-                      Row(
-                        children: [
-                          Text(
-                            'Bajas de activos',
-                            style: Theme.of(context).textTheme.titleMedium
-                                ?.copyWith(fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(width: 12),
-                          FilledButton.icon(
-                            onPressed: () => _newDisposalDialog(context),
-                            icon: const Icon(Icons.add, size: 18),
-                            label: const Text('Solicitar baja'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      Expanded(
-                        child: ListView(
-                          children: widget.state.disposalRequests
-                              .map(
-                                (d) => Card(
-                                  child: ListTile(
-                                    leading: Icon(
-                                      d.status == 'Aprobada'
-                                          ? Icons.check_circle_outline
-                                          : Icons.hourglass_top_outlined,
-                                      color: d.status == 'Aprobada'
-                                          ? Colors.green
-                                          : Colors.deepOrange,
-                                    ),
-                                    title: Text('${d.assetCode} · ${d.status}'),
-                                    subtitle: Text(
-                                      '${d.cause}\n${d.justification} · ${d.id}',
-                                    ),
-                                    isThreeLine: true,
-                                    trailing: Wrap(
-                                      spacing: 8,
-                                      children: [
-                                        if (!d.approvedByDependency &&
-                                            widget.state.hasRole(
-                                              UserRole.responsableArea,
-                                            ))
-                                          OutlinedButton(
-                                            onPressed: () => widget.state
-                                                .approveDisposalByDependency(d),
-                                            child: const Text(
-                                              'Aprueba Dependencia',
-                                            ),
-                                          ),
-                                        if (!d.approvedByDAF &&
-                                            widget.state.hasRole(
-                                              UserRole.direccionAdminFin,
-                                            ))
-                                          OutlinedButton(
-                                            onPressed: () => widget.state
-                                                .approveDisposalByDAF(d),
-                                            child: const Text('Aprueba DAF'),
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              )
-                              .toList(),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _newMaintenanceDialog(BuildContext context) async {
-    final code = TextEditingController();
-    final description = TextEditingController();
-    MaintenanceType type = MaintenanceType.preventivo;
-    await showDialog<void>(
-      context: context,
-      builder: (dialogCtx) {
-        String? errorMsg;
-        return StatefulBuilder(
-          builder: (dialogCtx, setLocal) {
-            return AlertDialog(
-              title: const Text('Solicitud de mantenimiento'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (errorMsg != null)
-                    Container(
-                      width: double.infinity,
-                      margin: const EdgeInsets.only(bottom: 12),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.red.shade50,
-                        border: Border.all(color: Colors.red.shade300),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.error_outline,
-                            color: Colors.red,
-                            size: 18,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              errorMsg!,
-                              style: TextStyle(
-                                color: Colors.red.shade800,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  TextField(
-                    controller: code,
-                    decoration: const InputDecoration(
-                      labelText: 'Codigo activo *',
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  DropdownButtonFormField<MaintenanceType>(
-                    value: type,
-                    items: MaintenanceType.values
-                        .map(
-                          (t) => DropdownMenuItem<MaintenanceType>(
-                            value: t,
-                            child: Text(t.name),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (v) {
-                      if (v != null) {
-                        setLocal(() => type = v);
-                      }
-                    },
-                    decoration: const InputDecoration(labelText: 'Tipo'),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: description,
-                    maxLines: 2,
-                    decoration: const InputDecoration(
-                      labelText: 'Descripcion *',
-                    ),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(dialogCtx),
-                  child: const Text('Cancelar'),
-                ),
-                FilledButton(
-                  onPressed: () {
-                    final c = code.text.trim();
-                    final d = description.text.trim();
-                    if (c.isEmpty || d.isEmpty) {
-                      setLocal(
-                        () => errorMsg =
-                            'El codigo del activo y la descripcion son obligatorios.',
-                      );
-                      return;
-                    }
-                    if (widget.state.findAsset(c) == null) {
-                      setLocal(
-                        () => errorMsg = 'No existe un activo con ese codigo.',
-                      );
-                      return;
-                    }
-                    widget.state.createMaintenance(
-                      assetCode: c,
-                      type: type,
-                      description: d,
-                    );
-                    Navigator.pop(dialogCtx);
-                  },
-                  child: const Text('Crear'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Future<void> _newDisposalDialog(BuildContext context) async {
-    final code = TextEditingController();
-    final cause = TextEditingController();
-    final justification = TextEditingController();
-    await showDialog<void>(
-      context: context,
-      builder: (dialogCtx) {
-        String? errorMsg;
-        return StatefulBuilder(
-          builder: (dialogCtx, setLocal) {
-            return AlertDialog(
-              title: const Text('Solicitud de baja'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (errorMsg != null)
-                    Container(
-                      width: double.infinity,
-                      margin: const EdgeInsets.only(bottom: 12),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.red.shade50,
-                        border: Border.all(color: Colors.red.shade300),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.error_outline,
-                            color: Colors.red,
-                            size: 18,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              errorMsg!,
-                              style: TextStyle(
-                                color: Colors.red.shade800,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  TextField(
-                    controller: code,
-                    decoration: const InputDecoration(
-                      labelText: 'Codigo activo *',
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: cause,
-                    decoration: const InputDecoration(labelText: 'Causal *'),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: justification,
-                    maxLines: 2,
-                    decoration: const InputDecoration(
-                      labelText: 'Justificacion',
-                    ),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(dialogCtx),
-                  child: const Text('Cancelar'),
-                ),
-                FilledButton(
-                  onPressed: () {
-                    final c = code.text.trim();
-                    final ca = cause.text.trim();
-                    if (c.isEmpty || ca.isEmpty) {
-                      setLocal(
-                        () => errorMsg =
-                            'El codigo del activo y el causal son obligatorios.',
-                      );
-                      return;
-                    }
-                    if (widget.state.findAsset(c) == null) {
-                      setLocal(
-                        () => errorMsg = 'No existe un activo con ese codigo.',
-                      );
-                      return;
-                    }
-                    widget.state.createDisposal(
-                      assetCode: c,
-                      cause: ca,
-                      justification: justification.text.trim(),
-                    );
-                    Navigator.pop(dialogCtx);
-                  },
-                  child: const Text('Solicitar'),
-                ),
-              ],
-            );
-          },
-        );
-      },
     );
   }
 }
@@ -3910,9 +2818,7 @@ class NotificationsPage extends StatelessWidget {
                           Row(
                             children: [
                               Icon(
-                                notif.type == 'maintenance'
-                                    ? Icons.build_outlined
-                                    : Icons.delete_sweep_outlined,
+                                Icons.delete_sweep_outlined,
                                 size: 18,
                                 color: const Color(0xFF00804E),
                               ),
@@ -4254,99 +3160,401 @@ class _ReportsPageState extends State<ReportsPage> {
   }
 }
 
-class IntegrationPage extends StatefulWidget {
-  const IntegrationPage({super.key, required this.state});
+// ── Pantalla de escaneo ───────────────────────────────────────────────────────
+
+class ScanPage extends StatefulWidget {
+  const ScanPage({super.key, required this.state});
 
   final AppState state;
 
   @override
-  State<IntegrationPage> createState() => _IntegrationPageState();
+  State<ScanPage> createState() => _ScanPageState();
 }
 
-class _IntegrationPageState extends State<IntegrationPage> {
-  late final TextEditingController host;
-  late final TextEditingController port;
-  late final TextEditingController database;
-  late final TextEditingController username;
-  late final TextEditingController password;
-  String result = 'Sin probar';
+class _ScanPageState extends State<ScanPage>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _lineCtrl;
+  late Animation<double> _lineAnim;
+  final _cameraCtrl = MobileScannerController();
+  bool _handled = false;
+  bool _torchOn = false;
 
   @override
   void initState() {
     super.initState();
-    final cfg = widget.state.postgresConfig;
-    host = TextEditingController(text: cfg.host);
-    port = TextEditingController(text: cfg.port.toString());
-    database = TextEditingController(text: cfg.database);
-    username = TextEditingController(text: cfg.username);
-    password = TextEditingController(text: cfg.password);
+    _lineCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat(reverse: true);
+    _lineAnim = CurvedAnimation(parent: _lineCtrl, curve: Curves.easeInOut);
   }
 
   @override
   void dispose() {
-    host.dispose();
-    port.dispose();
-    database.dispose();
-    username.dispose();
-    password.dispose();
+    _lineCtrl.dispose();
+    _cameraCtrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: ListView(
+    return Scaffold(
+      extendBodyBehindAppBar: true,
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black45,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        title: const Text(
+          'Escanear activo',
+          style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
+        ),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+        ),
+        actions: [
+          IconButton(
+            icon: Icon(
+              _torchOn ? Icons.flash_on : Icons.flash_off,
+              color: Colors.white,
+            ),
+            tooltip: 'Linterna',
+            onPressed: () {
+              setState(() => _torchOn = !_torchOn);
+              _cameraCtrl.toggleTorch();
+            },
+          ),
+        ],
+      ),
+      body: Stack(
+        fit: StackFit.expand,
         children: [
-          const Text(
-            'Integracion PostgreSQL (datos maestros)',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          MobileScanner(
+            controller: _cameraCtrl,
+            onDetect: (capture) {
+              if (_handled) return;
+              final code = capture.barcodes.firstOrNull?.rawValue;
+              if (code != null && code.isNotEmpty) {
+                _handled = true;
+                Navigator.pop(context, code);
+              }
+            },
           ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: host,
-            decoration: const InputDecoration(labelText: 'Host'),
-          ),
-          TextField(
-            controller: port,
-            decoration: const InputDecoration(labelText: 'Puerto'),
-          ),
-          TextField(
-            controller: database,
-            decoration: const InputDecoration(labelText: 'Base de datos'),
-          ),
-          TextField(
-            controller: username,
-            decoration: const InputDecoration(labelText: 'Usuario'),
-          ),
-          TextField(
-            controller: password,
-            decoration: const InputDecoration(labelText: 'Clave'),
-            obscureText: true,
-          ),
-          const SizedBox(height: 12),
-          Row(
+          _ScanOverlay(lineAnim: _lineAnim),
+        ],
+      ),
+    );
+  }
+}
+
+class _ScanOverlay extends StatelessWidget {
+  const _ScanOverlay({required this.lineAnim});
+
+  final Animation<double> lineAnim;
+
+  static const _boxSize = 260.0;
+  static const _green = Color(0xFF00DE8C);
+  static const _greenDark = Color(0xFF00804E);
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Expanded(
+          child: Stack(
+            alignment: Alignment.center,
             children: [
-              FilledButton(
-                onPressed: () async {
-                  widget.state.postgresConfig.host = host.text.trim();
-                  widget.state.postgresConfig.port =
-                      int.tryParse(port.text.trim()) ?? 5432;
-                  widget.state.postgresConfig.database = database.text.trim();
-                  widget.state.postgresConfig.username = username.text.trim();
-                  widget.state.postgresConfig.password = password.text;
-                  final response = await widget.state.testPostgresConnection();
-                  setState(() => result = response);
-                },
-                child: const Text('Probar conexion'),
+              // Fondo oscuro con hueco rectangular
+              CustomPaint(
+                size: Size.infinite,
+                painter: _HolePainter(boxSize: _boxSize),
+              ),
+              // Caja de escaneo con esquinas y linea animada
+              SizedBox(
+                width: _boxSize,
+                height: _boxSize,
+                child: Stack(
+                  children: [
+                    _corner(Alignment.topLeft,
+                        const BorderRadius.only(
+                            topLeft: Radius.circular(6))),
+                    _corner(Alignment.topRight,
+                        const BorderRadius.only(
+                            topRight: Radius.circular(6))),
+                    _corner(Alignment.bottomLeft,
+                        const BorderRadius.only(
+                            bottomLeft: Radius.circular(6))),
+                    _corner(Alignment.bottomRight,
+                        const BorderRadius.only(
+                            bottomRight: Radius.circular(6))),
+                    // Linea de escaneo animada
+                    AnimatedBuilder(
+                      animation: lineAnim,
+                      builder: (_, __) => Positioned(
+                        top: 8 + lineAnim.value * (_boxSize - 16),
+                        left: 12,
+                        right: 12,
+                        child: Container(
+                          height: 2.5,
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [
+                                Colors.transparent,
+                                _greenDark,
+                                _green,
+                                _greenDark,
+                                Colors.transparent,
+                              ],
+                            ),
+                            borderRadius: BorderRadius.circular(2),
+                            boxShadow: [
+                              BoxShadow(
+                                color: _green.withValues(alpha: 0.6),
+                                blurRadius: 8,
+                                spreadRadius: 1,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          Text(result),
+        ),
+        // Area de instrucciones inferior
+        Container(
+          width: double.infinity,
+          color: Colors.black87,
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 36),
+          child: const Column(
+            children: [
+              Icon(Icons.qr_code_scanner, color: Colors.white38, size: 30),
+              SizedBox(height: 10),
+              Text(
+                'Encuadra el codigo QR o de barras\ndentro del recuadro verde',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 14,
+                  height: 1.6,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _corner(Alignment alignment, BorderRadius radius) {
+    const size = 26.0;
+    const thick = 3.5;
+    return Align(
+      alignment: alignment,
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            border: Border(
+              top: alignment.y < 0
+                  ? const BorderSide(color: _green, width: thick)
+                  : BorderSide.none,
+              bottom: alignment.y > 0
+                  ? const BorderSide(color: _green, width: thick)
+                  : BorderSide.none,
+              left: alignment.x < 0
+                  ? const BorderSide(color: _green, width: thick)
+                  : BorderSide.none,
+              right: alignment.x > 0
+                  ? const BorderSide(color: _green, width: thick)
+                  : BorderSide.none,
+            ),
+            borderRadius: radius,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HolePainter extends CustomPainter {
+  const _HolePainter({required this.boxSize});
+
+  final double boxSize;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = Colors.black.withValues(alpha: 0.65);
+    final full = Rect.fromLTWH(0, 0, size.width, size.height);
+    final hole = Rect.fromCenter(
+      center: Offset(size.width / 2, size.height / 2),
+      width: boxSize,
+      height: boxSize,
+    );
+    final path = Path()
+      ..addRect(full)
+      ..addRRect(RRect.fromRectAndRadius(hole, const Radius.circular(12)))
+      ..fillType = PathFillType.evenOdd;
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => false;
+}
+
+// ── Bottom sheet resultado de escaneo ─────────────────────────────────────────
+
+class _AssetScanResultSheet extends StatelessWidget {
+  const _AssetScanResultSheet({required this.asset, required this.state});
+
+  final Asset asset;
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final stateColor = asset.state == AssetState.activo
+        ? const Color(0xFF00804E)
+        : asset.state == AssetState.enReparacion
+            ? Colors.orange
+            : Colors.red;
+
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(
+        24,
+        16,
+        24,
+        MediaQuery.of(context).viewInsets.bottom + 36,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.black12,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: stateColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  Icons.inventory_2_outlined,
+                  color: stateColor,
+                  size: 26,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      asset.code,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.black45,
+                      ),
+                    ),
+                    Text(
+                      asset.name,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: stateColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  asset.state.label,
+                  style: TextStyle(
+                    color: stateColor,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          if (asset.photoBase64 != null) ...[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.memory(
+                base64Decode(asset.photoBase64!),
+                width: double.infinity,
+                height: 180,
+                fit: BoxFit.cover,
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+          _infoRow(Icons.location_on_outlined, 'Ubicacion',
+              asset.physicalLocation),
+          _infoRow(Icons.person_outlined, 'Responsable', asset.responsible),
+          _infoRow(Icons.business_outlined, 'Dependencia', asset.dependency),
+          _infoRow(Icons.category_outlined, 'Categoria',
+              '${asset.category} - ${asset.subcategory}'),
+          if (asset.observations.isNotEmpty)
+            _infoRow(
+                Icons.notes_outlined, 'Observaciones', asset.observations),
           const SizedBox(height: 20),
-          const Text(
-            'Nota: esta integracion minima valida conectividad y deja preparado el punto para consumo de datos maestros de activos/dependencias.',
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              icon: const Icon(Icons.close),
+              label: const Text('Cerrar'),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _infoRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 17, color: Colors.black38),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(fontSize: 11, color: Colors.black45),
+                ),
+                Text(value, style: const TextStyle(fontSize: 14)),
+              ],
+            ),
           ),
         ],
       ),
