@@ -2267,7 +2267,7 @@ class _UsersPageState extends State<UsersPage> {
                       return;
                     }
                     final newUser = AppUser(
-                      id: 'U${(widget.state.users.length + 1).toString().padLeft(3, '0')}',
+                      id: 'U${DateTime.now().millisecondsSinceEpoch}',
                       username: u,
                       fullName: f,
                       email: e,

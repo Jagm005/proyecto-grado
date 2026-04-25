@@ -31,11 +31,13 @@ router.post('/', async (req, res, next) => {
     return res.status(400).json({ error: 'Faltan campos requeridos' });
   }
   try {
+    // Formato de array literal de PostgreSQL para tipo enum custom: '{rol1,rol2}'
+    const rolesLiteral = '{' + (roles ?? []).join(',') + '}';
     const { rows } = await pool.query(
       `INSERT INTO users (id, username, full_name, email, password_hash, roles, area)
        VALUES ($1, $2, $3, $4, crypt($5, gen_salt('bf')), $6::user_role[], $7)
        RETURNING id, username, full_name, email, roles, is_active, area`,
-      [id, username, full_name, email, password, roles ?? [], area ?? '']
+      [id, username, full_name, email, password, rolesLiteral, area ?? '']
     );
     res.status(201).json(rows[0]);
   } catch (err) { next(err); }
