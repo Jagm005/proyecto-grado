@@ -723,6 +723,96 @@ class AppState extends ChangeNotifier {
     return user.password == password;
   }
 
+  /// Actualiza el nombre del usuario actual. En modo institucional persiste en el backend.
+  /// Retorna null si exitoso, o un mensaje de error.
+  Future<String?> selfUpdateProfile({required String fullName}) async {
+    final user = currentUser;
+    if (user == null) return 'No hay sesión activa';
+    if (authMode == AuthMode.institutional) {
+      try {
+        final response = await http
+            .patch(
+              Uri.parse('$_backendUrl/api/users/${user.id}'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'full_name': fullName}),
+            )
+            .timeout(const Duration(seconds: 10));
+        if (response.statusCode != 200) {
+          final body = jsonDecode(response.body) as Map<String, dynamic>;
+          return (body['error'] as String?) ?? 'Error al actualizar el perfil';
+        }
+      } on http.ClientException {
+        return 'No se pudo conectar al servidor';
+      } catch (e) {
+        return 'Error inesperado: $e';
+      }
+    }
+    user.fullName = fullName;
+    notifyListeners();
+    return null;
+  }
+
+  /// Cambia la contraseña del usuario actual verificando la contraseña actual.
+  /// En modo institucional persiste en el backend.
+  /// Retorna null si exitoso, o un mensaje de error.
+  Future<String?> selfChangePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final user = currentUser;
+    if (user == null) return 'No hay sesión activa';
+
+    if (authMode == AuthMode.institutional) {
+      // Verificar contraseña actual contra el backend antes de cambiarla
+      try {
+        final verifyResponse = await http
+            .post(
+              Uri.parse('$_backendUrl/api/auth/login'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({
+                'identifier': user.username,
+                'password': currentPassword,
+              }),
+            )
+            .timeout(const Duration(seconds: 10));
+        if (verifyResponse.statusCode != 200) {
+          return 'La contraseña actual es incorrecta';
+        }
+      } on http.ClientException {
+        return 'No se pudo conectar al servidor';
+      } catch (e) {
+        return 'Error inesperado: $e';
+      }
+
+      try {
+        final response = await http
+            .patch(
+              Uri.parse('$_backendUrl/api/users/${user.id}/password'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'password': newPassword}),
+            )
+            .timeout(const Duration(seconds: 10));
+        if (response.statusCode != 204) {
+          final body = jsonDecode(response.body) as Map<String, dynamic>;
+          return (body['error'] as String?) ?? 'Error al cambiar la contraseña';
+        }
+      } on http.ClientException {
+        return 'No se pudo conectar al servidor';
+      } catch (e) {
+        return 'Error inesperado: $e';
+      }
+      return null;
+    }
+
+    // Modo local: verificar en memoria
+    if (!_validateInstitutionalCredential(user, currentPassword)) {
+      return 'La contraseña actual es incorrecta';
+    }
+    user.password = newPassword;
+    notifyListeners();
+    return null;
+  }
+
   void logout() {
     currentUser = null;
     notifyListeners();
@@ -1692,6 +1782,16 @@ class _HomePageState extends State<HomePage> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.manage_accounts_outlined),
+            tooltip: 'Configuración de cuenta',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => AccountSettingsPage(state: widget.state),
+              ),
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: TextButton.icon(
@@ -4210,6 +4310,291 @@ class _AssetScanResultSheet extends StatelessWidget {
                 ),
                 Text(value, style: const TextStyle(fontSize: 14)),
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pantalla de Configuración de Cuenta
+// ─────────────────────────────────────────────────────────────────────────────
+class AccountSettingsPage extends StatefulWidget {
+  const AccountSettingsPage({super.key, required this.state});
+  final AppState state;
+
+  @override
+  State<AccountSettingsPage> createState() => _AccountSettingsPageState();
+}
+
+class _AccountSettingsPageState extends State<AccountSettingsPage> {
+  final _nameController = TextEditingController();
+  final _currentPasswordController = TextEditingController();
+  final _newPasswordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
+
+  bool _savingName = false;
+  bool _savingPassword = false;
+  bool _showCurrent = false;
+  bool _showNew = false;
+  bool _showConfirm = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController.text = widget.state.currentUser?.fullName ?? '';
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _currentPasswordController.dispose();
+    _newPasswordController.dispose();
+    _confirmPasswordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _saveName() async {
+    final name = _nameController.text.trim();
+    if (name.isEmpty) return;
+    setState(() => _savingName = true);
+    final error = await widget.state.selfUpdateProfile(fullName: name);
+    if (!mounted) return;
+    setState(() => _savingName = false);
+    if (error == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nombre actualizado correctamente')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  Future<void> _savePassword() async {
+    final current = _currentPasswordController.text;
+    final newPass = _newPasswordController.text;
+    final confirm = _confirmPasswordController.text;
+    if (current.isEmpty || newPass.isEmpty || confirm.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Completa todos los campos de contraseña'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    if (newPass != confirm) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Las contraseñas nuevas no coinciden'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    if (newPass.length < 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('La contraseña debe tener al menos 6 caracteres'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    setState(() => _savingPassword = true);
+    final error = await widget.state.selfChangePassword(
+      currentPassword: current,
+      newPassword: newPass,
+    );
+    if (!mounted) return;
+    setState(() => _savingPassword = false);
+    if (error == null) {
+      _currentPasswordController.clear();
+      _newPasswordController.clear();
+      _confirmPasswordController.clear();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Contraseña actualizada correctamente')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = widget.state.currentUser;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Configuración de cuenta')),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          // ── Info de cuenta ──────────────────────────────────────────────
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 28,
+                    backgroundColor: const Color(
+                      0xFF00804E,
+                    ).withValues(alpha: 0.15),
+                    child: Text(
+                      (user?.fullName.isNotEmpty == true
+                              ? user!.fullName[0]
+                              : '?')
+                          .toUpperCase(),
+                      style: const TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF00804E),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        user?.username ?? '',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                        ),
+                      ),
+                      Text(
+                        user?.email ?? '',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: Colors.black54,
+                        ),
+                      ),
+                      if ((user?.roles ?? []).isNotEmpty)
+                        Text(
+                          user!.roles.map((r) => r.label).join(' · '),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF00804E),
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // ── Cambiar nombre ───────────────────────────────────────────────
+          Text(
+            'Nombre para mostrar',
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _nameController,
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(
+              labelText: 'Nombre completo',
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.person_outline),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton(
+              onPressed: _savingName ? null : _saveName,
+              child: _savingName
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text('Guardar nombre'),
+            ),
+          ),
+          const Divider(height: 36),
+
+          // ── Cambiar contraseña ───────────────────────────────────────────
+          Text(
+            'Cambiar contraseña',
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _currentPasswordController,
+            obscureText: !_showCurrent,
+            decoration: InputDecoration(
+              labelText: 'Contraseña actual',
+              border: const OutlineInputBorder(),
+              prefixIcon: const Icon(Icons.lock_outline),
+              suffixIcon: IconButton(
+                icon: Icon(
+                  _showCurrent ? Icons.visibility_off : Icons.visibility,
+                ),
+                onPressed: () => setState(() => _showCurrent = !_showCurrent),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _newPasswordController,
+            obscureText: !_showNew,
+            decoration: InputDecoration(
+              labelText: 'Nueva contraseña',
+              border: const OutlineInputBorder(),
+              prefixIcon: const Icon(Icons.lock_reset_outlined),
+              suffixIcon: IconButton(
+                icon: Icon(_showNew ? Icons.visibility_off : Icons.visibility),
+                onPressed: () => setState(() => _showNew = !_showNew),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _confirmPasswordController,
+            obscureText: !_showConfirm,
+            decoration: InputDecoration(
+              labelText: 'Confirmar nueva contraseña',
+              border: const OutlineInputBorder(),
+              prefixIcon: const Icon(Icons.lock_reset_outlined),
+              suffixIcon: IconButton(
+                icon: Icon(
+                  _showConfirm ? Icons.visibility_off : Icons.visibility,
+                ),
+                onPressed: () => setState(() => _showConfirm = !_showConfirm),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton(
+              onPressed: _savingPassword ? null : _savePassword,
+              child: _savingPassword
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text('Cambiar contraseña'),
             ),
           ),
         ],
