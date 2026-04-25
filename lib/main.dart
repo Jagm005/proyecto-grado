@@ -107,19 +107,6 @@ extension UserRoleX on UserRole {
   }
 }
 
-enum AuthMode { institutional, localFallback }
-
-extension AuthModeX on AuthMode {
-  String get label {
-    switch (this) {
-      case AuthMode.institutional:
-        return 'Autenticacion institucional';
-      case AuthMode.localFallback:
-        return 'Modo local (solo demo)';
-    }
-  }
-}
-
 enum AssetState {
   activo,
   reubicado,
@@ -391,7 +378,6 @@ class AppState extends ChangeNotifier {
   final List<AppNotification> notifications = [];
 
   AppUser? currentUser;
-  AuthMode authMode = AuthMode.institutional;
   int maxFailedAttempts = 3;
 
   int get unreadCount =>
@@ -586,11 +572,6 @@ class AppState extends ChangeNotifier {
 
   bool canApproveDisposals() => false; // feature removed
 
-  void setAuthMode(AuthMode mode) {
-    authMode = mode;
-    notifyListeners();
-  }
-
   void setMaxFailedAttempts(int value) {
     if (value <= 0) {
       return;
@@ -621,10 +602,7 @@ class AppState extends ChangeNotifier {
   ///   Prefijo  WARN:restantes  - credenciales invalidas, muestra intentos restantes (RF03)
   ///   Prefijo  INFO:mensaje    - error informativo sin conteo
   Future<String?> login(String username, String password) async {
-    if (authMode == AuthMode.institutional) {
-      return _loginWithBackend(username.trim(), password);
-    }
-    return _loginLocal(username.trim(), password);
+    return _loginWithBackend(username.trim(), password);
   }
 
   Future<String?> _loginWithBackend(String username, String password) async {
@@ -639,7 +617,7 @@ class AppState extends ChangeNotifier {
           .timeout(const Duration(seconds: 10));
 
       if (!response.body.trimLeft().startsWith('{')) {
-        return 'INFO:El servidor no responde correctamente. Cambie a modo local.';
+        return 'INFO:El servidor no responde correctamente. Verifique la conexion.';
       }
 
       final body = jsonDecode(response.body) as Map<String, dynamic>;
@@ -673,53 +651,14 @@ class AppState extends ChangeNotifier {
       return 'INFO:$message';
     } on http.ClientException catch (e) {
       debugPrint('ClientException: $e');
-      return 'INFO:No se pudo conectar al servidor. Verifique la red o use el modo local.';
+      return 'INFO:No se pudo conectar al servidor. Verifique la red.';
     } catch (e) {
       debugPrint('Login error: $e');
-      return 'INFO:No se pudo conectar al servidor. Verifique la red o use el modo local.';
+      return 'INFO:No se pudo conectar al servidor. Verifique la red.';
     }
-  }
-
-  String? _loginLocal(String username, String password) {
-    final user = _findUserByUsername(username.trim());
-    if (user == null) {
-      return 'INFO:Usuario no encontrado';
-    }
-    if (!user.isActive) {
-      return 'INFO:Usuario desactivado. Contacte al Administrador';
-    }
-    if (user.lockUntil != null && user.lockUntil!.isAfter(DateTime.now())) {
-      final seconds = user.lockUntil!.difference(DateTime.now()).inSeconds;
-      return 'LOCK:$seconds';
-    }
-
-    final valid = _validateInstitutionalCredential(user, password);
-    if (!valid) {
-      user.failedAttempts += 1;
-      if (user.failedAttempts >= maxFailedAttempts) {
-        user.lockUntil = DateTime.now().add(const Duration(minutes: 15));
-        user.failedAttempts = 0;
-        notifyListeners();
-        return 'LOCK:900';
-      }
-      final remaining = maxFailedAttempts - user.failedAttempts;
-      notifyListeners();
-      return 'WARN:$remaining';
-    }
-
-    user.failedAttempts = 0;
-    user.lockUntil = null;
-    user.lastSession = DateTime.now();
-    currentUser = user;
-    notifyListeners();
-    return null;
   }
 
   bool _validateInstitutionalCredential(AppUser user, String password) {
-    if (authMode == AuthMode.institutional) {
-      // Integration point for SSO/LDAP institutional auth.
-      return user.password == password;
-    }
     return user.password == password;
   }
 
@@ -728,24 +667,22 @@ class AppState extends ChangeNotifier {
   Future<String?> selfUpdateProfile({required String fullName}) async {
     final user = currentUser;
     if (user == null) return 'No hay sesión activa';
-    if (authMode == AuthMode.institutional) {
-      try {
-        final response = await http
-            .patch(
-              Uri.parse('$_backendUrl/api/users/${user.id}'),
-              headers: {'Content-Type': 'application/json'},
-              body: jsonEncode({'full_name': fullName}),
-            )
-            .timeout(const Duration(seconds: 10));
-        if (response.statusCode != 200) {
-          final body = jsonDecode(response.body) as Map<String, dynamic>;
-          return (body['error'] as String?) ?? 'Error al actualizar el perfil';
-        }
-      } on http.ClientException {
-        return 'No se pudo conectar al servidor';
-      } catch (e) {
-        return 'Error inesperado: $e';
+    try {
+      final response = await http
+          .patch(
+            Uri.parse('$_backendUrl/api/users/${user.id}'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'full_name': fullName}),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode != 200) {
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+        return (body['error'] as String?) ?? 'Error al actualizar el perfil';
       }
+    } on http.ClientException {
+      return 'No se pudo conectar al servidor';
+    } catch (e) {
+      return 'Error inesperado: $e';
     }
     user.fullName = fullName;
     notifyListeners();
@@ -762,54 +699,44 @@ class AppState extends ChangeNotifier {
     final user = currentUser;
     if (user == null) return 'No hay sesión activa';
 
-    if (authMode == AuthMode.institutional) {
-      // Verificar contraseña actual contra el backend antes de cambiarla
-      try {
-        final verifyResponse = await http
-            .post(
-              Uri.parse('$_backendUrl/api/auth/login'),
-              headers: {'Content-Type': 'application/json'},
-              body: jsonEncode({
-                'identifier': user.username,
-                'password': currentPassword,
-              }),
-            )
-            .timeout(const Duration(seconds: 10));
-        if (verifyResponse.statusCode != 200) {
-          return 'La contraseña actual es incorrecta';
-        }
-      } on http.ClientException {
-        return 'No se pudo conectar al servidor';
-      } catch (e) {
-        return 'Error inesperado: $e';
+    // Verificar contraseña actual contra el backend antes de cambiarla
+    try {
+      final verifyResponse = await http
+          .post(
+            Uri.parse('$_backendUrl/api/auth/login'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'identifier': user.username,
+              'password': currentPassword,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (verifyResponse.statusCode != 200) {
+        return 'La contraseña actual es incorrecta';
       }
-
-      try {
-        final response = await http
-            .patch(
-              Uri.parse('$_backendUrl/api/users/${user.id}/password'),
-              headers: {'Content-Type': 'application/json'},
-              body: jsonEncode({'password': newPassword}),
-            )
-            .timeout(const Duration(seconds: 10));
-        if (response.statusCode != 204) {
-          final body = jsonDecode(response.body) as Map<String, dynamic>;
-          return (body['error'] as String?) ?? 'Error al cambiar la contraseña';
-        }
-      } on http.ClientException {
-        return 'No se pudo conectar al servidor';
-      } catch (e) {
-        return 'Error inesperado: $e';
-      }
-      return null;
+    } on http.ClientException {
+      return 'No se pudo conectar al servidor';
+    } catch (e) {
+      return 'Error inesperado: $e';
     }
 
-    // Modo local: verificar en memoria
-    if (!_validateInstitutionalCredential(user, currentPassword)) {
-      return 'La contraseña actual es incorrecta';
+    try {
+      final response = await http
+          .patch(
+            Uri.parse('$_backendUrl/api/users/${user.id}/password'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'password': newPassword}),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode != 204) {
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+        return (body['error'] as String?) ?? 'Error al cambiar la contraseña';
+      }
+    } on http.ClientException {
+      return 'No se pudo conectar al servidor';
+    } catch (e) {
+      return 'Error inesperado: $e';
     }
-    user.password = newPassword;
-    notifyListeners();
     return null;
   }
 
@@ -861,15 +788,13 @@ class AppState extends ChangeNotifier {
       (_) => chars[rng.nextInt(chars.length)],
     ).join();
 
-    if (authMode == AuthMode.institutional) {
-      await http
-          .patch(
-            Uri.parse('$_backendUrl/api/users/${user.id}/password'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'password': password}),
-          )
-          .timeout(const Duration(seconds: 10));
-    }
+    await http
+        .patch(
+          Uri.parse('$_backendUrl/api/users/${user.id}/password'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'password': password}),
+        )
+        .timeout(const Duration(seconds: 10));
 
     user.password = password;
     // Marcar como aprobadas las solicitudes pendientes de ese usuario
@@ -898,40 +823,35 @@ class AppState extends ChangeNotifier {
   /// Crea un usuario. En modo institucional persiste en el backend.
   /// Retorna null si fue exitoso, o un mensaje de error.
   Future<String?> createUser(AppUser user) async {
-    if (authMode == AuthMode.institutional) {
-      try {
-        final response = await http
-            .post(
-              Uri.parse('$_backendUrl/api/users'),
-              headers: {'Content-Type': 'application/json'},
-              body: jsonEncode({
-                'id': user.id,
-                'username': user.username,
-                'full_name': user.fullName,
-                'email': user.email,
-                'password': user.password,
-                'roles': user.roles.map((r) => r.name).toList(),
-                'area': user.area,
-              }),
-            )
-            .timeout(const Duration(seconds: 10));
-        if (response.statusCode == 201) {
-          users.add(user);
-          notifyListeners();
-          return null;
-        }
-        final body = jsonDecode(response.body) as Map<String, dynamic>;
-        return (body['error'] as String?) ??
-            'Error al crear el usuario en el servidor';
-      } on http.ClientException {
-        return 'No se pudo conectar al servidor';
-      } catch (e) {
-        return 'Error inesperado: $e';
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_backendUrl/api/users'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'id': user.id,
+              'username': user.username,
+              'full_name': user.fullName,
+              'email': user.email,
+              'password': user.password,
+              'roles': user.roles.map((r) => r.name).toList(),
+              'area': user.area,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode == 201) {
+        users.add(user);
+        notifyListeners();
+        return null;
       }
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      return (body['error'] as String?) ??
+          'Error al crear el usuario en el servidor';
+    } on http.ClientException {
+      return 'No se pudo conectar al servidor';
+    } catch (e) {
+      return 'Error inesperado: $e';
     }
-    users.add(user);
-    notifyListeners();
-    return null;
   }
 
   /// Login con Google: obtiene el correo de la cuenta Google y verifica
@@ -948,56 +868,39 @@ class AppState extends ChangeNotifier {
       }
       final email = account.email;
 
-      if (authMode == AuthMode.institutional) {
-        final response = await http
-            .post(
-              Uri.parse('$_backendUrl/api/auth/google-login'),
-              headers: {'Content-Type': 'application/json'},
-              body: jsonEncode({'email': email}),
-            )
-            .timeout(const Duration(seconds: 10));
+      final response = await http
+          .post(
+            Uri.parse('$_backendUrl/api/auth/google-login'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'email': email}),
+          )
+          .timeout(const Duration(seconds: 10));
 
-        if (!response.body.trimLeft().startsWith('{')) {
-          return 'INFO:El servidor no responde correctamente. Cambie a modo local.';
-        }
-
-        final body = jsonDecode(response.body) as Map<String, dynamic>;
-
-        if (response.statusCode == 200) {
-          final rawRoles = (body['roles'] as List).cast<String>();
-          currentUser = AppUser(
-            id: body['id'] as String,
-            username: body['username'] as String,
-            fullName: body['fullName'] as String,
-            email: body['email'] as String,
-            password: '',
-            area: (body['area'] as String?) ?? '',
-            roles: rawRoles.map((r) => UserRole.values.byName(r)).toList(),
-            isActive: body['isActive'] as bool,
-          );
-          notifyListeners();
-          return null;
-        }
-        final message =
-            (body['message'] ?? body['error']) as String? ??
-            'Error desconocido';
-        return 'INFO:$message';
+      if (!response.body.trimLeft().startsWith('{')) {
+        return 'INFO:El servidor no responde correctamente. Verifique la conexion.';
       }
 
-      // Modo local: buscar por email en lista local
-      final localUser = users
-          .where((u) => u.email.toLowerCase() == email.toLowerCase())
-          .firstOrNull;
-      if (localUser == null) {
-        return 'INFO:No existe un usuario registrado con este correo de Google.';
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+
+      if (response.statusCode == 200) {
+        final rawRoles = (body['roles'] as List).cast<String>();
+        currentUser = AppUser(
+          id: body['id'] as String,
+          username: body['username'] as String,
+          fullName: body['fullName'] as String,
+          email: body['email'] as String,
+          password: '',
+          area: (body['area'] as String?) ?? '',
+          roles: rawRoles.map((r) => UserRole.values.byName(r)).toList(),
+          isActive: body['isActive'] as bool,
+        );
+        notifyListeners();
+        return null;
       }
-      if (!localUser.isActive) {
-        return 'INFO:Usuario desactivado. Contacte al Administrador';
-      }
-      localUser.lastSession = DateTime.now();
-      currentUser = localUser;
-      notifyListeners();
-      return null;
+      final message =
+          (body['message'] ?? body['error']) as String? ??
+          'Error desconocido';
+      return 'INFO:$message';
     } on http.ClientException catch (e) {
       debugPrint('Google login ClientException: $e');
       return 'INFO:No se pudo conectar al servidor.';
@@ -1441,27 +1344,6 @@ class _LoginPageState extends State<LoginPage> {
                     ),
                     const SizedBox(height: 20),
 
-                    // RF01: mecanismo de autenticacion configurable
-                    DropdownButtonFormField<AuthMode>(
-                      value: widget.state.authMode,
-                      items: AuthMode.values
-                          .map(
-                            (m) => DropdownMenuItem<AuthMode>(
-                              value: m,
-                              child: Text(m.label),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (value) {
-                        if (value != null) widget.state.setAuthMode(value);
-                      },
-                      decoration: const InputDecoration(
-                        labelText: 'Mecanismo de autenticacion',
-                        isDense: true,
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-
                     TextField(
                       controller: _userController,
                       enabled: !locked,
@@ -1551,9 +1433,9 @@ class _LoginPageState extends State<LoginPage> {
                     ),
 
                     const Divider(height: 28),
-                    // RF02: accesos rapidos por rol para demo
                     const Text(
-                      'Acceso rapido por rol (demo):',
+                      'Acceso rapido por rol:',
+                    // accesos rapidos de credenciales
                       style: TextStyle(fontSize: 12),
                     ),
                     const SizedBox(height: 8),
