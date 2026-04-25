@@ -33,7 +33,7 @@ router.post('/', async (req, res, next) => {
   try {
     const { rows } = await pool.query(
       `INSERT INTO users (id, username, full_name, email, password_hash, roles, area)
-       VALUES ($1, $2, $3, $4, crypt($5, gen_salt('bf')), $6, $7)
+       VALUES ($1, $2, $3, $4, crypt($5, gen_salt('bf')), $6::user_role[], $7)
        RETURNING id, username, full_name, email, roles, is_active, area`,
       [id, username, full_name, email, password, roles ?? [], area ?? '']
     );
