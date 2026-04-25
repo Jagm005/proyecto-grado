@@ -658,7 +658,7 @@ class AppState extends ChangeNotifier {
       }
 
       final code = body['code'] as String? ?? 'INFO';
-      final message = body['message'] as String? ?? '';
+      final message = (body['message'] ?? body['error']) as String? ?? 'Error desconocido del servidor';
       final seconds = body['seconds'] as int? ?? 900;
       final remaining = body['remaining'] as int? ?? 0;
 
@@ -831,8 +831,6 @@ class AppState extends ChangeNotifier {
     try {
       final googleSignIn = GoogleSignIn(
         scopes: ['email'],
-        serverClientId:
-            '421805141170-avtr91aaj56ohm83l2jjvbqoi39f1cvo.apps.googleusercontent.com',
       );
       // Intenta login silencioso primero (sesion previa), si no abre selector
       GoogleSignInAccount? account = await googleSignIn.signInSilently();
