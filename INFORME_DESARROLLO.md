@@ -3,7 +3,7 @@
 > **Proyecto de Grado** · Abril 2026  
 > Plataforma móvil y web para el control y trazabilidad de activos fijos institucionales.
 
----
+--
 
 ## Tabla de Contenidos
 
