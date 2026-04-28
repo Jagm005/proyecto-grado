@@ -3,7 +3,7 @@
 > **Versión 1.0** · Abril 2026  
 > Este manual explica cómo utilizar la aplicación paso a paso, organizado por perfil de usuario.
 
----
+--
 
 ## Tabla de Contenidos
 
