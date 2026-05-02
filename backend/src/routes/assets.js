@@ -64,12 +64,15 @@ router.post('/', async (req, res, next) => {
 
 // PATCH /api/assets/:code
 router.patch('/:code', async (req, res, next) => {
+  const photo = req.body.photo_base64;
+  console.log(`[PATCH /${req.params.code}] body_keys=${JSON.stringify(Object.keys(req.body))} | photo_base64=${photo ? 'SI (' + photo.length + ' chars)' : 'NO/null'}`);
   const allowed = [
     'name', 'category', 'subcategory', 'physical_location', 'responsible',
     'dependency', 'cost_center', 'acquisition_value', 'acquisition_date',
     'estimated_useful_life_years', 'state', 'observations', 'program', 'photo_path', 'photo_base64',
   ];
   const fields = Object.keys(req.body).filter((k) => allowed.includes(k));
+  console.log(`[PATCH /${req.params.code}] fields_to_update=${JSON.stringify(fields)}`);
   if (!fields.length) return res.status(400).json({ error: 'Nada que actualizar' });
 
   const sets   = fields.map((f, i) => `${f} = $${i + 2}`).join(', ');

@@ -312,32 +312,40 @@ class Asset {
   );
 
   /// Construye un [Asset] desde la respuesta snake_case del backend REST.
-  factory Asset.fromBackendJson(Map<String, dynamic> j) => Asset(
-    code: j['code'] as String,
-    name: j['name'] as String,
-    category: j['category'] as String,
-    subcategory: (j['subcategory'] as String?) ?? '',
-    physicalLocation: (j['physical_location'] as String?) ?? '',
-    responsible: (j['responsible'] as String?) ?? '',
-    responsibleId: '',
-    dependency: (j['dependency'] as String?) ?? '',
-    costCenter: (j['cost_center'] as String?) ?? '',
-    acquisitionValue:
-        double.tryParse(j['acquisition_value']?.toString() ?? '0') ?? 0,
-    acquisitionDate: j['acquisition_date'] != null
-        ? DateTime.parse(j['acquisition_date'] as String)
-        : DateTime.now(),
-    estimatedUsefulLifeYears: (j['estimated_useful_life_years'] as int?) ?? 5,
-    state: AssetState.values.byName((j['state'] as String?) ?? 'activo'),
-    observations: (j['observations'] as String?) ?? '',
-    program: (j['program'] as String?) ?? '',
-    photoBase64: j['photo_base64'] as String?,
-    history:
-        (j['history'] as List?)
-            ?.map((h) => AssetHistoryEvent.fromJson(h as Map<String, dynamic>))
-            .toList() ??
-        [],
-  );
+  factory Asset.fromBackendJson(Map<String, dynamic> j) {
+    final photoVal = j['photo_base64'];
+    debugPrint(
+      '[fromBackendJson] ${j['code']} photo_base64=${photoVal != null ? 'SI (${(photoVal as String).length} chars)' : 'NO'}',
+    );
+    return Asset(
+      code: j['code'] as String,
+      name: j['name'] as String,
+      category: j['category'] as String,
+      subcategory: (j['subcategory'] as String?) ?? '',
+      physicalLocation: (j['physical_location'] as String?) ?? '',
+      responsible: (j['responsible'] as String?) ?? '',
+      responsibleId: '',
+      dependency: (j['dependency'] as String?) ?? '',
+      costCenter: (j['cost_center'] as String?) ?? '',
+      acquisitionValue:
+          double.tryParse(j['acquisition_value']?.toString() ?? '0') ?? 0,
+      acquisitionDate: j['acquisition_date'] != null
+          ? DateTime.parse(j['acquisition_date'] as String)
+          : DateTime.now(),
+      estimatedUsefulLifeYears: (j['estimated_useful_life_years'] as int?) ?? 5,
+      state: AssetState.values.byName((j['state'] as String?) ?? 'activo'),
+      observations: (j['observations'] as String?) ?? '',
+      program: (j['program'] as String?) ?? '',
+      photoBase64: photoVal as String?,
+      history:
+          (j['history'] as List?)
+              ?.map(
+                (h) => AssetHistoryEvent.fromJson(h as Map<String, dynamic>),
+              )
+              .toList() ??
+          [],
+    );
+  }
 }
 
 // ── Notificaciones ────────────────────────────────────────────────────────────
@@ -1013,8 +1021,15 @@ class AppState extends ChangeNotifier {
                   'photo_base64': asset.photoBase64,
               }),
             )
-            .timeout(const Duration(seconds: 10));
+            .timeout(
+              asset.photoBase64 != null
+                  ? const Duration(seconds: 60)
+                  : const Duration(seconds: 10),
+            );
         if (res.statusCode == 201) {
+          debugPrint(
+            '[addAsset] Activo guardado OK en BD. photo=${asset.photoBase64 != null ? 'SI (${asset.photoBase64!.length} chars b64)' : 'NO'}',
+          );
           // Registrar historial de creacion en el backend (fire-and-forget)
           http
               .post(
@@ -1069,6 +1084,9 @@ class AppState extends ChangeNotifier {
     String? newPhotoBase64,
     bool clearPhoto = false,
   }) {
+    // Re-resolve to the live asset in case loadAssetsFromBackend() replaced
+    // the list while an edit dialog was open (e.g. after returning from camera).
+    asset = assets.firstWhere((a) => a.code == asset.code, orElse: () => asset);
     final changes = <String>[];
     if (newName != null && newName != asset.name) {
       changes.add('Nombre: ${asset.name} -> $newName');
@@ -1137,6 +1155,7 @@ class AppState extends ChangeNotifier {
       asset.photoBase64 = newPhotoBase64;
       changes.add('Foto actualizada');
     }
+    debugPrint('[updateAsset] changes: $changes');
     if (changes.isNotEmpty) {
       asset.history.add(
         AssetHistoryEvent(
@@ -1170,12 +1189,15 @@ class AppState extends ChangeNotifier {
       if (clearPhoto) {
         patchBody['photo_base64'] = null;
       } else if (newPhotoBase64 != null) {
-        patchBody['photo_base64'] = asset.photoBase64;
+        patchBody['photo_base64'] = newPhotoBase64;
       }
       // Si hay foto en el payload usamos un timeout mayor
       final hasPhotoPayload =
           patchBody.containsKey('photo_base64') &&
           patchBody['photo_base64'] != null;
+      debugPrint(
+        '[PATCH-SEND] ${asset.code} | photo_en_body=${hasPhotoPayload ? '${(patchBody['photo_base64'] as String).length} chars' : 'null/absent'}',
+      );
       http
           .patch(
             Uri.parse('$_backendUrl/api/assets/${asset.code}'),
@@ -1189,6 +1211,15 @@ class AppState extends ChangeNotifier {
           )
           .then((res) {
             if (res.statusCode == 200) {
+              try {
+                final rb = jsonDecode(res.body) as Map<String, dynamic>;
+                final photoInResp = rb['photo_base64'];
+                debugPrint(
+                  '[updateAsset] PATCH OK para ${asset.code} | photo_en_bd=${photoInResp != null ? 'SI (${(photoInResp as String).length} chars)' : 'NO'}',
+                );
+              } catch (_) {
+                debugPrint('[updateAsset] PATCH OK para ${asset.code}');
+              }
               http
                   .post(
                     Uri.parse('$_backendUrl/api/assets/${asset.code}/history'),
@@ -1205,11 +1236,11 @@ class AppState extends ChangeNotifier {
                   );
             } else {
               debugPrint(
-                'updateAsset backend error: ${res.statusCode} ${res.body}',
+                '[updateAsset] PATCH ERROR: ${res.statusCode} ${res.body}',
               );
             }
           })
-          .catchError((e) => debugPrint('updateAsset backend error: $e'));
+          .catchError((e) => debugPrint('[updateAsset] PATCH catchError: $e'));
     }
   }
 
@@ -1229,7 +1260,10 @@ class AppState extends ChangeNotifier {
     try {
       final response = await http
           .get(Uri.parse('$_backendUrl/api/assets'))
-          .timeout(const Duration(seconds: 15));
+          .timeout(const Duration(seconds: 30));
+      debugPrint(
+        '[loadAssets] respuesta ${response.statusCode}, tamaño=${response.body.length} bytes',
+      );
       if (response.statusCode == 200 &&
           response.body.trimLeft().startsWith('[')) {
         final parsed = <Asset>[];
@@ -2896,28 +2930,46 @@ class _AssetsPageState extends State<AssetsPage> {
     final observations = TextEditingController();
     final program = TextEditingController();
 
+    String? errorMsg;
+    AppUser? selectedResponsible;
+    Uint8List? capturedPhotoBytes;
+
+    Future<void> pickPhotoCreate(
+      ImageSource source,
+      StateSetter setLocal,
+    ) async {
+      try {
+        final picker = ImagePicker();
+        debugPrint('[FOTO] Abriendo cámara/galería...');
+        final photo = await picker.pickImage(
+          source: source,
+          imageQuality: 72,
+          maxWidth: 1200,
+        );
+        if (photo != null) {
+          debugPrint('[FOTO] Foto obtenida: ${photo.path}');
+          final bytes = await File(photo.path).readAsBytes();
+          debugPrint('[FOTO] Bytes leídos: ${bytes.length}');
+          if (bytes.isNotEmpty) {
+            setLocal(() => capturedPhotoBytes = bytes);
+            debugPrint(
+              '[FOTO] capturedPhotoBytes asignado OK (${bytes.length} bytes)',
+            );
+          } else {
+            debugPrint('[FOTO] WARN: bytes vacíos');
+          }
+        } else {
+          debugPrint('[FOTO] Usuario canceló la captura');
+        }
+      } catch (e, st) {
+        debugPrint('[FOTO] ERROR: $e\n$st');
+        setLocal(() => errorMsg = 'No se pudo obtener la foto: $e');
+      }
+    }
+
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
-        String? errorMsg;
-        AppUser? selectedResponsible;
-        Uint8List? capturedPhotoBytes;
-
-        Future<void> pickPhoto(ImageSource source, StateSetter setLocal) async {
-          try {
-            final picker = ImagePicker();
-            final photo = await picker.pickImage(
-              source: source,
-              imageQuality: 72,
-              maxWidth: 1200,
-            );
-            if (photo != null) {
-              final bytes = await photo.readAsBytes();
-              setLocal(() => capturedPhotoBytes = bytes);
-            }
-          } catch (_) {}
-        }
-
         return StatefulBuilder(
           builder: (dialogContext, setLocal) {
             return AlertDialog(
@@ -3013,7 +3065,10 @@ class _AssetsPageState extends State<AssetsPage> {
                                 SimpleDialogOption(
                                   onPressed: () {
                                     Navigator.pop(ctx);
-                                    pickPhoto(ImageSource.camera, setLocal);
+                                    pickPhotoCreate(
+                                      ImageSource.camera,
+                                      setLocal,
+                                    );
                                   },
                                   child: const Row(
                                     children: [
@@ -3026,7 +3081,10 @@ class _AssetsPageState extends State<AssetsPage> {
                                 SimpleDialogOption(
                                   onPressed: () {
                                     Navigator.pop(ctx);
-                                    pickPhoto(ImageSource.gallery, setLocal);
+                                    pickPhotoCreate(
+                                      ImageSource.gallery,
+                                      setLocal,
+                                    );
                                   },
                                   child: const Row(
                                     children: [
@@ -3184,6 +3242,9 @@ class _AssetsPageState extends State<AssetsPage> {
                       performedBy:
                           widget.state.currentUser?.username ?? 'system',
                     );
+                    debugPrint(
+                      '[GUARDAR] capturedPhotoBytes=${capturedPhotoBytes?.length ?? 'null'} | error=$error',
+                    );
                     if (error != null) {
                       setLocal(() => errorMsg = error);
                       return;
@@ -3233,33 +3294,46 @@ class _AssetsPageState extends State<AssetsPage> {
       text: selectedResponsible == null ? asset.responsible : '',
     );
 
+    String? errorMsg;
+    Uint8List? newPhotoBytes;
+    bool clearCurrentPhoto = false;
+
+    Future<void> pickPhotoEdit(ImageSource source, StateSetter setLocal) async {
+      try {
+        final picker = ImagePicker();
+        debugPrint('[FOTO-EDIT] Abriendo cámara/galería...');
+        final photo = await picker.pickImage(
+          source: source,
+          imageQuality: 72,
+          maxWidth: 1200,
+        );
+        if (photo != null) {
+          debugPrint('[FOTO-EDIT] Foto obtenida: ${photo.path}');
+          final bytes = await File(photo.path).readAsBytes();
+          debugPrint('[FOTO-EDIT] Bytes leídos: ${bytes.length}');
+          if (bytes.isNotEmpty) {
+            setLocal(() {
+              newPhotoBytes = bytes;
+              clearCurrentPhoto = false;
+            });
+            debugPrint(
+              '[FOTO-EDIT] newPhotoBytes asignado OK (${bytes.length} bytes)',
+            );
+          } else {
+            debugPrint('[FOTO-EDIT] WARN: bytes vacíos');
+          }
+        } else {
+          debugPrint('[FOTO-EDIT] Usuario canceló la captura');
+        }
+      } catch (e, st) {
+        debugPrint('[FOTO-EDIT] ERROR: $e\n$st');
+        setLocal(() => errorMsg = 'No se pudo obtener la foto: $e');
+      }
+    }
+
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
-        String? errorMsg;
-        // foto: null = sin cambio, bytes = nueva foto
-        Uint8List? newPhotoBytes;
-        // Mantener referencia a foto actual para poder eliminarla
-        bool clearCurrentPhoto = false;
-
-        Future<void> pickPhoto(ImageSource source, StateSetter setLocal) async {
-          try {
-            final picker = ImagePicker();
-            final photo = await picker.pickImage(
-              source: source,
-              imageQuality: 72,
-              maxWidth: 1200,
-            );
-            if (photo != null) {
-              final bytes = await photo.readAsBytes();
-              setLocal(() {
-                newPhotoBytes = bytes;
-                clearCurrentPhoto = false;
-              });
-            }
-          } catch (_) {}
-        }
-
         return StatefulBuilder(
           builder: (dialogContext, setLocal) {
             // Foto a mostrar: nueva seleccionada, la actual, o nada
@@ -3319,6 +3393,7 @@ class _AssetsPageState extends State<AssetsPage> {
                       // Responsable: dropdown si hay usuarios, sino texto libre
                       widget.state.users.any((u) => u.isActive)
                           ? DropdownButtonFormField<AppUser?>(
+                              isExpanded: true,
                               value: selectedResponsible,
                               decoration: const InputDecoration(
                                 labelText: 'Responsable *',
@@ -3422,7 +3497,7 @@ class _AssetsPageState extends State<AssetsPage> {
                                 SimpleDialogOption(
                                   onPressed: () {
                                     Navigator.pop(ctx);
-                                    pickPhoto(ImageSource.camera, setLocal);
+                                    pickPhotoEdit(ImageSource.camera, setLocal);
                                   },
                                   child: const Row(
                                     children: [
@@ -3435,7 +3510,10 @@ class _AssetsPageState extends State<AssetsPage> {
                                 SimpleDialogOption(
                                   onPressed: () {
                                     Navigator.pop(ctx);
-                                    pickPhoto(ImageSource.gallery, setLocal);
+                                    pickPhotoEdit(
+                                      ImageSource.gallery,
+                                      setLocal,
+                                    );
                                   },
                                   child: const Row(
                                     children: [
@@ -3522,7 +3600,7 @@ class _AssetsPageState extends State<AssetsPage> {
                                                   SimpleDialogOption(
                                                     onPressed: () {
                                                       Navigator.pop(ctx);
-                                                      pickPhoto(
+                                                      pickPhotoEdit(
                                                         ImageSource.camera,
                                                         setLocal,
                                                       );
@@ -3541,7 +3619,7 @@ class _AssetsPageState extends State<AssetsPage> {
                                                   SimpleDialogOption(
                                                     onPressed: () {
                                                       Navigator.pop(ctx);
-                                                      pickPhoto(
+                                                      pickPhotoEdit(
                                                         ImageSource.gallery,
                                                         setLocal,
                                                       );
@@ -3665,6 +3743,9 @@ class _AssetsPageState extends State<AssetsPage> {
                       return;
                     }
 
+                    debugPrint(
+                      '[GUARDAR-EDIT] newPhotoBytes=${newPhotoBytes?.length ?? 'null'} clearPhoto=$clearCurrentPhoto',
+                    );
                     widget.state.updateAsset(
                       asset,
                       performedBy:
@@ -3839,8 +3920,13 @@ class _AssetsPageState extends State<AssetsPage> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (ctx) =>
-          _AssetScanResultSheet(asset: asset, state: widget.state),
+      builder: (ctx) => ListenableBuilder(
+        listenable: widget.state,
+        builder: (_, __) {
+          final latest = widget.state.findAsset(asset.code) ?? asset;
+          return _AssetScanResultSheet(asset: latest, state: widget.state);
+        },
+      ),
     );
   }
 }
