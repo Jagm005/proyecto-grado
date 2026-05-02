@@ -447,20 +447,7 @@ class AppState extends ChangeNotifier {
     await prefs.remove('assets');
 
     // Cargar activos desde el backend.
-    try {
-      final response = await http
-          .get(Uri.parse('$_backendUrl/api/assets'))
-          .timeout(const Duration(seconds: 10));
-      if (response.statusCode == 200 &&
-          response.body.trimLeft().startsWith('[')) {
-        assets.clear();
-        for (final j in jsonDecode(response.body) as List) {
-          assets.add(Asset.fromBackendJson(j as Map<String, dynamic>));
-        }
-      }
-    } catch (e) {
-      debugPrint('load assets from backend failed: $e');
-    }
+    await _fetchAssetsFromBackend();
 
     final notifData = prefs.getString('notifications');
     if (notifData != null) {
@@ -486,6 +473,38 @@ class AppState extends ChangeNotifier {
       'notifications',
       jsonEncode(notifications.map((n) => n.toJson()).toList()),
     );
+  }
+
+  /// Descarga los activos desde el backend y reemplaza la lista local.
+  /// Usa una lista temporal para que un error de parseo no deje la lista vacía.
+  Future<void> _fetchAssetsFromBackend() async {
+    try {
+      final response = await http
+          .get(Uri.parse('$_backendUrl/api/assets'))
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200 &&
+          response.body.trimLeft().startsWith('[')) {
+        final parsed = <Asset>[];
+        for (final j in jsonDecode(response.body) as List) {
+          try {
+            parsed.add(Asset.fromBackendJson(j as Map<String, dynamic>));
+          } catch (e) {
+            debugPrint('Error parsing asset: $e  →  $j');
+          }
+        }
+        assets
+          ..clear()
+          ..addAll(parsed);
+      }
+    } catch (e) {
+      debugPrint('fetchAssetsFromBackend failed: $e');
+    }
+  }
+
+  /// Recarga los activos desde el backend y notifica la UI.
+  Future<void> refreshAssets() async {
+    await _fetchAssetsFromBackend();
+    notifyListeners();
   }
 
   void seedData() {
@@ -1734,8 +1753,27 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   int _tabIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      widget.state.refreshAssets();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
