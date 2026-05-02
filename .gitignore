@@ -47,3 +47,4 @@ app.*.map.json
 # Google authentication files
 google-services.json
 client_secret_*.json
+/proyecto-grado-web

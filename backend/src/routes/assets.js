@@ -36,7 +36,7 @@ router.post('/', async (req, res, next) => {
   const {
     code, name, category, subcategory, physical_location, responsible,
     dependency, cost_center, acquisition_value, acquisition_date,
-    estimated_useful_life_years, state, observations, program, photo_path,
+    estimated_useful_life_years, state, observations, program, photo_path, photo_base64,
   } = req.body;
 
   if (!code || !name || !category || !dependency) {
@@ -48,13 +48,14 @@ router.post('/', async (req, res, next) => {
       `INSERT INTO assets
          (code, name, category, subcategory, physical_location, responsible,
           dependency, cost_center, acquisition_value, acquisition_date,
-          estimated_useful_life_years, state, observations, program, photo_path)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+          estimated_useful_life_years, state, observations, program, photo_path, photo_base64)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        RETURNING *`,
       [
         code, name, category, subcategory ?? '', physical_location ?? '', responsible ?? '',
         dependency, cost_center ?? '', acquisition_value ?? 0, acquisition_date ?? new Date(),
-        estimated_useful_life_years ?? 5, state ?? 'activo', observations ?? '', program ?? '', photo_path,
+        estimated_useful_life_years ?? 5, state ?? 'activo', observations ?? '', program ?? '',
+        photo_path ?? null, photo_base64 ?? null,
       ]
     );
     res.status(201).json(rows[0]);
@@ -66,7 +67,7 @@ router.patch('/:code', async (req, res, next) => {
   const allowed = [
     'name', 'category', 'subcategory', 'physical_location', 'responsible',
     'dependency', 'cost_center', 'acquisition_value', 'acquisition_date',
-    'estimated_useful_life_years', 'state', 'observations', 'program', 'photo_path',
+    'estimated_useful_life_years', 'state', 'observations', 'program', 'photo_path', 'photo_base64',
   ];
   const fields = Object.keys(req.body).filter((k) => allowed.includes(k));
   if (!fields.length) return res.status(400).json({ error: 'Nada que actualizar' });

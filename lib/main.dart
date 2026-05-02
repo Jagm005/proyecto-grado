@@ -310,6 +310,33 @@ class Asset {
             .toList() ??
         [],
   );
+
+  /// Construye un [Asset] desde la respuesta snake_case del backend REST.
+  factory Asset.fromBackendJson(Map<String, dynamic> j) => Asset(
+    code: j['code'] as String,
+    name: j['name'] as String,
+    category: j['category'] as String,
+    subcategory: (j['subcategory'] as String?) ?? '',
+    physicalLocation: (j['physical_location'] as String?) ?? '',
+    responsible: (j['responsible'] as String?) ?? '',
+    responsibleId: '',
+    dependency: (j['dependency'] as String?) ?? '',
+    costCenter: (j['cost_center'] as String?) ?? '',
+    acquisitionValue: (j['acquisition_value'] as num?)?.toDouble() ?? 0,
+    acquisitionDate: j['acquisition_date'] != null
+        ? DateTime.parse(j['acquisition_date'] as String)
+        : DateTime.now(),
+    estimatedUsefulLifeYears: (j['estimated_useful_life_years'] as int?) ?? 5,
+    state: AssetState.values.byName((j['state'] as String?) ?? 'activo'),
+    observations: (j['observations'] as String?) ?? '',
+    program: (j['program'] as String?) ?? '',
+    photoBase64: j['photo_base64'] as String?,
+    history:
+        (j['history'] as List?)
+            ?.map((h) => AssetHistoryEvent.fromJson(h as Map<String, dynamic>))
+            .toList() ??
+        [],
+  );
 }
 
 // ── Notificaciones ────────────────────────────────────────────────────────────
@@ -416,12 +443,23 @@ class AppState extends ChangeNotifier {
       }
     }
 
-    final assetsData = prefs.getString('assets');
-    if (assetsData != null) {
-      assets.clear();
-      for (final j in jsonDecode(assetsData) as List) {
-        assets.add(Asset.fromJson(j as Map<String, dynamic>));
+    // Limpiar caché viejo de activos (ahora el backend es la única fuente de verdad).
+    await prefs.remove('assets');
+
+    // Cargar activos desde el backend.
+    try {
+      final response = await http
+          .get(Uri.parse('$_backendUrl/api/assets'))
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200 &&
+          response.body.trimLeft().startsWith('[')) {
+        assets.clear();
+        for (final j in jsonDecode(response.body) as List) {
+          assets.add(Asset.fromBackendJson(j as Map<String, dynamic>));
+        }
       }
+    } catch (e) {
+      debugPrint('load assets from backend failed: $e');
     }
 
     final notifData = prefs.getString('notifications');
@@ -443,10 +481,7 @@ class AppState extends ChangeNotifier {
       'users',
       jsonEncode(users.map((u) => u.toJson()).toList()),
     );
-    await prefs.setString(
-      'assets',
-      jsonEncode(assets.map((a) => a.toJson()).toList()),
-    );
+    // Los activos NO se persisten localmente; el backend es la fuente de verdad.
     await prefs.setString(
       'notifications',
       jsonEncode(notifications.map((n) => n.toJson()).toList()),
@@ -515,6 +550,7 @@ class AppState extends ChangeNotifier {
         program: 'Administracion',
       ),
       performedBy: 'system',
+      localOnly: true,
     );
 
     addAsset(
@@ -536,6 +572,7 @@ class AppState extends ChangeNotifier {
         program: 'Administracion',
       ),
       performedBy: 'system',
+      localOnly: true,
     );
   }
 
@@ -898,8 +935,7 @@ class AppState extends ChangeNotifier {
         return null;
       }
       final message =
-          (body['message'] ?? body['error']) as String? ??
-          'Error desconocido';
+          (body['message'] ?? body['error']) as String? ?? 'Error desconocido';
       return 'INFO:$message';
     } on http.ClientException catch (e) {
       debugPrint('Google login ClientException: $e');
@@ -931,12 +967,24 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Elimina el activo localmente y en el backend (sin esperar respuesta).
   void deleteAsset(Asset asset) {
     assets.remove(asset);
     notifyListeners();
+    http
+        .delete(Uri.parse('$_backendUrl/api/assets/${asset.code}'))
+        .timeout(const Duration(seconds: 10))
+        .catchError((e) => debugPrint('deleteAsset backend error: $e'));
   }
 
-  void addAsset(Asset asset, {required String performedBy}) {
+  /// Crea el activo localmente y lo persiste en el backend.
+  /// [localOnly] se usa solo en seedData() para no hacer peticiones al backend.
+  /// Retorna null si fue exitoso, o un mensaje de error si falló el guardado.
+  Future<String?> addAsset(
+    Asset asset, {
+    required String performedBy,
+    bool localOnly = false,
+  }) async {
     asset.history.add(
       AssetHistoryEvent(
         timestamp: DateTime.now(),
@@ -947,8 +995,69 @@ class AppState extends ChangeNotifier {
     );
     assets.add(asset);
     notifyListeners();
+    if (!localOnly) {
+      try {
+        final res = await http
+            .post(
+              Uri.parse('$_backendUrl/api/assets'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({
+                'code': asset.code,
+                'name': asset.name,
+                'category': asset.category,
+                'subcategory': asset.subcategory,
+                'physical_location': asset.physicalLocation,
+                'responsible': asset.responsible,
+                'dependency': asset.dependency,
+                'cost_center': asset.costCenter,
+                'acquisition_value': asset.acquisitionValue,
+                'acquisition_date': asset.acquisitionDate
+                    .toIso8601String()
+                    .substring(0, 10),
+                'estimated_useful_life_years': asset.estimatedUsefulLifeYears,
+                'state': asset.state.name,
+                'observations': asset.observations,
+                'program': asset.program,
+                if (asset.photoBase64 != null)
+                  'photo_base64': asset.photoBase64,
+              }),
+            )
+            .timeout(const Duration(seconds: 10));
+        if (res.statusCode == 201) {
+          // Registrar historial de creacion en el backend (fire-and-forget)
+          http
+              .post(
+                Uri.parse('$_backendUrl/api/assets/${asset.code}/history'),
+                headers: {'Content-Type': 'application/json'},
+                body: jsonEncode({
+                  'action': 'CREACION',
+                  'detail': 'Activo registrado',
+                  'performed_by': performedBy,
+                }),
+              )
+              .timeout(const Duration(seconds: 10))
+              .catchError(
+                (e) => debugPrint('addAsset history backend error: $e'),
+              );
+        } else {
+          // Revertir la adición local porque el backend rechazó el activo
+          assets.remove(asset);
+          notifyListeners();
+          debugPrint('addAsset backend error: ${res.statusCode} ${res.body}');
+          return 'Error del servidor (${res.statusCode}). El activo no fue guardado.';
+        }
+      } catch (e) {
+        // Revertir la adición local ante cualquier error de red
+        assets.remove(asset);
+        notifyListeners();
+        debugPrint('addAsset backend error: $e');
+        return 'No se pudo conectar al servidor. Verifica tu conexión e intenta de nuevo.';
+      }
+    }
+    return null;
   }
 
+  /// Actualiza el activo localmente y en el backend.
   void updateAsset(
     Asset asset, {
     required String performedBy,
@@ -984,6 +1093,44 @@ class AppState extends ChangeNotifier {
         ),
       );
       notifyListeners();
+      // Persistir cambios en el backend
+      final patchBody = <String, dynamic>{};
+      if (newResponsible != null) patchBody['responsible'] = asset.responsible;
+      if (newLocation != null)
+        patchBody['physical_location'] = asset.physicalLocation;
+      if (newState != null) patchBody['state'] = asset.state.name;
+      if (notes != null && notes.trim().isNotEmpty)
+        patchBody['observations'] = asset.observations;
+      http
+          .patch(
+            Uri.parse('$_backendUrl/api/assets/${asset.code}'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(patchBody),
+          )
+          .timeout(const Duration(seconds: 10))
+          .then((res) {
+            if (res.statusCode == 200) {
+              http
+                  .post(
+                    Uri.parse('$_backendUrl/api/assets/${asset.code}/history'),
+                    headers: {'Content-Type': 'application/json'},
+                    body: jsonEncode({
+                      'action': 'ACTUALIZACION',
+                      'detail': changes.join(' | '),
+                      'performed_by': performedBy,
+                    }),
+                  )
+                  .timeout(const Duration(seconds: 10))
+                  .catchError(
+                    (e) => debugPrint('updateAsset history backend error: $e'),
+                  );
+            } else {
+              debugPrint(
+                'updateAsset backend error: ${res.statusCode} ${res.body}',
+              );
+            }
+          })
+          .catchError((e) => debugPrint('updateAsset backend error: $e'));
     }
   }
 
@@ -994,6 +1141,25 @@ class AppState extends ChangeNotifier {
       }
     }
     return null;
+  }
+
+  /// Recarga los activos desde el backend (usado por pull-to-refresh).
+  Future<void> loadAssetsFromBackend() async {
+    try {
+      final response = await http
+          .get(Uri.parse('$_backendUrl/api/assets'))
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200 &&
+          response.body.trimLeft().startsWith('[')) {
+        assets.clear();
+        for (final j in jsonDecode(response.body) as List) {
+          assets.add(Asset.fromBackendJson(j as Map<String, dynamic>));
+        }
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('loadAssetsFromBackend failed: $e');
+    }
   }
 
   void markNotificationRead(AppNotification n) {
@@ -1435,7 +1601,7 @@ class _LoginPageState extends State<LoginPage> {
                     const Divider(height: 28),
                     const Text(
                       'Acceso rapido por rol:',
-                    // accesos rapidos de credenciales
+                      // accesos rapidos de credenciales
                       style: TextStyle(fontSize: 12),
                     ),
                     const SizedBox(height: 8),
@@ -2456,107 +2622,111 @@ class _AssetsPageState extends State<AssetsPage> {
           ),
           const SizedBox(height: 12),
           Expanded(
-            child: ListView.builder(
-              itemCount: filtered.length,
-              itemBuilder: (context, index) {
-                final asset = filtered[index];
-                return Card(
-                  child: ExpansionTile(
-                    title: Text('${asset.code} - ${asset.name}'),
-                    subtitle: Text(
-                      '${asset.category} | ${asset.state.label} | Responsable: ${asset.responsible}',
-                    ),
-                    children: [
-                      ListTile(
-                        title: Text('Ubicacion: ${asset.physicalLocation}'),
-                        subtitle: Text(
-                          'Dependencia: ${asset.dependency} | Programa: ${asset.program}\nValor: ${asset.acquisitionValue.toStringAsFixed(0)}',
-                        ),
+            child: RefreshIndicator(
+              onRefresh: widget.state.loadAssetsFromBackend,
+              child: ListView.builder(
+                itemCount: filtered.length,
+                itemBuilder: (context, index) {
+                  final asset = filtered[index];
+                  return Card(
+                    child: ExpansionTile(
+                      title: Text('${asset.code} - ${asset.name}'),
+                      subtitle: Text(
+                        '${asset.category} | ${asset.state.label} | Responsable: ${asset.responsible}',
                       ),
-                      if (asset.photoBase64 != null)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Foto del activo',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.black54,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(10),
-                                child: Image.memory(
-                                  base64Decode(asset.photoBase64!),
-                                  width: double.infinity,
-                                  height: 200,
-                                  fit: BoxFit.cover,
-                                ),
-                              ),
-                            ],
+                      children: [
+                        ListTile(
+                          title: Text('Ubicacion: ${asset.physicalLocation}'),
+                          subtitle: Text(
+                            'Dependencia: ${asset.dependency} | Programa: ${asset.program}\nValor: ${asset.acquisitionValue.toStringAsFixed(0)}',
                           ),
                         ),
-                      Wrap(
-                        spacing: 8,
-                        children: [
-                          if (widget.state.canManageAssets())
-                            OutlinedButton(
-                              onPressed: () => _editAssetDialog(context, asset),
-                              child: const Text('Editar activo'),
-                            ),
-                          OutlinedButton(
-                            onPressed: () => _showHistory(context, asset),
-                            child: const Text('Ver historial'),
-                          ),
-                          if (widget.state.canManageAssets())
-                            OutlinedButton(
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: Colors.red,
-                                side: const BorderSide(color: Colors.red),
-                              ),
-                              onPressed: () async {
-                                final confirm = await showDialog<bool>(
-                                  context: context,
-                                  builder: (ctx) => AlertDialog(
-                                    title: const Text('Eliminar activo'),
-                                    content: Text(
-                                      'Eliminar el activo ${asset.code} - ${asset.name}?\nEsta accion no se puede deshacer.',
-                                    ),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () =>
-                                            Navigator.pop(ctx, false),
-                                        child: const Text('Cancelar'),
-                                      ),
-                                      FilledButton(
-                                        style: FilledButton.styleFrom(
-                                          backgroundColor: Colors.red,
-                                        ),
-                                        onPressed: () =>
-                                            Navigator.pop(ctx, true),
-                                        child: const Text('Eliminar'),
-                                      ),
-                                    ],
+                        if (asset.photoBase64 != null)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Foto del activo',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.black54,
+                                    fontWeight: FontWeight.w500,
                                   ),
-                                );
-                                if (confirm == true) {
-                                  widget.state.deleteAsset(asset);
-                                }
-                              },
-                              child: const Text('Eliminar'),
+                                ),
+                                const SizedBox(height: 6),
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Image.memory(
+                                    base64Decode(asset.photoBase64!),
+                                    width: double.infinity,
+                                    height: 200,
+                                    fit: BoxFit.cover,
+                                  ),
+                                ),
+                              ],
                             ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                  ),
-                );
-              },
-            ),
+                          ),
+                        Wrap(
+                          spacing: 8,
+                          children: [
+                            if (widget.state.canManageAssets())
+                              OutlinedButton(
+                                onPressed: () =>
+                                    _editAssetDialog(context, asset),
+                                child: const Text('Editar activo'),
+                              ),
+                            OutlinedButton(
+                              onPressed: () => _showHistory(context, asset),
+                              child: const Text('Ver historial'),
+                            ),
+                            if (widget.state.canManageAssets())
+                              OutlinedButton(
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.red,
+                                  side: const BorderSide(color: Colors.red),
+                                ),
+                                onPressed: () async {
+                                  final confirm = await showDialog<bool>(
+                                    context: context,
+                                    builder: (ctx) => AlertDialog(
+                                      title: const Text('Eliminar activo'),
+                                      content: Text(
+                                        'Eliminar el activo ${asset.code} - ${asset.name}?\nEsta accion no se puede deshacer.',
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () =>
+                                              Navigator.pop(ctx, false),
+                                          child: const Text('Cancelar'),
+                                        ),
+                                        FilledButton(
+                                          style: FilledButton.styleFrom(
+                                            backgroundColor: Colors.red,
+                                          ),
+                                          onPressed: () =>
+                                              Navigator.pop(ctx, true),
+                                          child: const Text('Eliminar'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                  if (confirm == true) {
+                                    widget.state.deleteAsset(asset);
+                                  }
+                                },
+                                child: const Text('Eliminar'),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ), // RefreshIndicator
           ),
         ],
       ),
@@ -2642,10 +2812,10 @@ class _AssetsPageState extends State<AssetsPage> {
                             ],
                           ),
                         ),
-                      _field(code, 'Codigo interno'),
-                      _field(name, 'Nombre / descripcion'),
-                      _field(category, 'Categoria'),
-                      _field(subcategory, 'Subcategoria'),
+                      _field(code, 'Código interno *'),
+                      _field(name, 'Nombre / descripción *'),
+                      _field(category, 'Categoría *'),
+                      _field(subcategory, 'Subcategoría'),
                       const SizedBox(height: 8),
                       DropdownButtonFormField<AppUser>(
                         value: selectedResponsible,
@@ -2675,10 +2845,10 @@ class _AssetsPageState extends State<AssetsPage> {
                         },
                       ),
                       const SizedBox(height: 8),
-                      _field(dependency, 'Área / Dependencia'),
-                      _field(location, 'Ubicación física'),
+                      _field(dependency, 'Área / Dependencia *'),
+                      _field(location, 'Ubicación física *'),
                       _field(costCenter, 'Centro de costo'),
-                      _field(program, 'Programa academico'),
+                      _field(program, 'Programa académico'),
                       _field(value, 'Valor adquisicion'),
                       _field(usefulLife, 'Vida util (anios)'),
                       _field(observations, 'Observaciones'),
@@ -2796,17 +2966,40 @@ class _AssetsPageState extends State<AssetsPage> {
                   child: const Text('Cancelar'),
                 ),
                 FilledButton(
-                  onPressed: () {
-                    if (code.text.trim().isEmpty || name.text.trim().isEmpty) {
+                  onPressed: () async {
+                    if (code.text.trim().isEmpty) {
+                      setLocal(
+                        () => errorMsg = 'El código interno es obligatorio.',
+                      );
+                      return;
+                    }
+                    if (name.text.trim().isEmpty) {
                       setLocal(
                         () => errorMsg =
-                            'El código y el nombre son obligatorios.',
+                            'El nombre / descripción es obligatorio.',
                       );
+                      return;
+                    }
+                    if (category.text.trim().isEmpty) {
+                      setLocal(() => errorMsg = 'La categoría es obligatoria.');
                       return;
                     }
                     if (selectedResponsible == null) {
                       setLocal(
                         () => errorMsg = 'Debes seleccionar un responsable.',
+                      );
+                      return;
+                    }
+                    if (dependency.text.trim().isEmpty) {
+                      setLocal(
+                        () =>
+                            errorMsg = 'El área / dependencia es obligatoria.',
+                      );
+                      return;
+                    }
+                    if (location.text.trim().isEmpty) {
+                      setLocal(
+                        () => errorMsg = 'La ubicación física es obligatoria.',
                       );
                       return;
                     }
@@ -2816,7 +3009,7 @@ class _AssetsPageState extends State<AssetsPage> {
                       );
                       return;
                     }
-                    widget.state.addAsset(
+                    final error = await widget.state.addAsset(
                       Asset(
                         code: code.text.trim(),
                         name: name.text.trim(),
@@ -2842,6 +3035,10 @@ class _AssetsPageState extends State<AssetsPage> {
                       performedBy:
                           widget.state.currentUser?.username ?? 'system',
                     );
+                    if (error != null) {
+                      setLocal(() => errorMsg = error);
+                      return;
+                    }
                     Navigator.pop(dialogContext);
                   },
                   child: const Text('Guardar'),
@@ -2864,6 +3061,7 @@ class _AssetsPageState extends State<AssetsPage> {
     await showDialog<void>(
       context: context,
       builder: (context) {
+        String? errorMsg;
         return StatefulBuilder(
           builder: (context, setLocal) {
             return AlertDialog(
@@ -2871,8 +3069,41 @@ class _AssetsPageState extends State<AssetsPage> {
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _field(responsible, 'Responsable'),
-                  _field(location, 'Ubicacion'),
+                  if (errorMsg != null)
+                    Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade50,
+                        border: Border.all(color: Colors.red.shade300),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.error_outline,
+                            color: Colors.red,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              errorMsg!,
+                              style: TextStyle(
+                                color: Colors.red.shade800,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  _field(responsible, 'Responsable *'),
+                  _field(location, 'Ubicación *'),
                   _field(notes, 'Observaciones'),
                   DropdownButtonFormField<AssetState>(
                     value: selectedState,
@@ -2900,6 +3131,18 @@ class _AssetsPageState extends State<AssetsPage> {
                 ),
                 FilledButton(
                   onPressed: () {
+                    if (responsible.text.trim().isEmpty) {
+                      setLocal(
+                        () => errorMsg = 'El responsable es obligatorio.',
+                      );
+                      return;
+                    }
+                    if (location.text.trim().isEmpty) {
+                      setLocal(
+                        () => errorMsg = 'La ubicación física es obligatoria.',
+                      );
+                      return;
+                    }
                     widget.state.updateAsset(
                       asset,
                       performedBy:

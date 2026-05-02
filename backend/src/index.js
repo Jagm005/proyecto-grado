@@ -9,8 +9,14 @@ const inventoryRouter  = require('./routes/inventory');
 const maintenanceRouter= require('./routes/maintenance');
 const disposalRouter   = require('./routes/disposal');
 
+const pool = require('./db');
 const app  = express();
 const PORT = process.env.PORT || 3000;
+
+// Migración automática: añadir columna photo_base64 si no existe
+pool.query(
+  `ALTER TABLE assets ADD COLUMN IF NOT EXISTS photo_base64 TEXT`,
+).catch((err) => console.error('Migration photo_base64 failed:', err.message));
 
 app.use(helmet());
 app.use(cors());
