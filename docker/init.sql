@@ -63,6 +63,7 @@ CREATE TABLE assets (
   observations                TEXT,
   program                     VARCHAR(200)   NOT NULL,
   photo_path                  VARCHAR(500),
+  photo_base64                TEXT,
   created_at                  TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
   updated_at                  TIMESTAMPTZ    NOT NULL DEFAULT NOW()
 );
