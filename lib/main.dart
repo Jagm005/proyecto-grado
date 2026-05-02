@@ -678,7 +678,7 @@ class AppState extends ChangeNotifier {
   /// --dart-define=BACKEND_URL=http://10.0.2.2:3000  (Android emulador)
   static const _backendUrl = String.fromEnvironment(
     'BACKEND_URL',
-    defaultValue: 'http://18.223.120.46:3000',
+    defaultValue: 'https://inventario-ucp.duckdns.org',
   );
 
   /// Retorna null si el login fue exitoso.
