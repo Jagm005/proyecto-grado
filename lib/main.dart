@@ -322,7 +322,8 @@ class Asset {
     responsibleId: '',
     dependency: (j['dependency'] as String?) ?? '',
     costCenter: (j['cost_center'] as String?) ?? '',
-    acquisitionValue: (j['acquisition_value'] as num?)?.toDouble() ?? 0,
+    acquisitionValue:
+        double.tryParse(j['acquisition_value']?.toString() ?? '0') ?? 0,
     acquisitionDate: j['acquisition_date'] != null
         ? DateTime.parse(j['acquisition_date'] as String)
         : DateTime.now(),
@@ -407,6 +408,9 @@ class AppState extends ChangeNotifier {
   AppUser? currentUser;
   int maxFailedAttempts = 3;
 
+  /// null = sin error, String = mensaje del último fallo al cargar activos.
+  String? assetsLoadError;
+
   int get unreadCount =>
       notifications.where((n) => !n.read && _notifVisibleToMe(n)).length;
 
@@ -447,7 +451,7 @@ class AppState extends ChangeNotifier {
     await prefs.remove('assets');
 
     // Cargar activos desde el backend.
-    await _fetchAssetsFromBackend();
+    await loadAssetsFromBackend();
 
     final notifData = prefs.getString('notifications');
     if (notifData != null) {
@@ -473,38 +477,6 @@ class AppState extends ChangeNotifier {
       'notifications',
       jsonEncode(notifications.map((n) => n.toJson()).toList()),
     );
-  }
-
-  /// Descarga los activos desde el backend y reemplaza la lista local.
-  /// Usa una lista temporal para que un error de parseo no deje la lista vacía.
-  Future<void> _fetchAssetsFromBackend() async {
-    try {
-      final response = await http
-          .get(Uri.parse('$_backendUrl/api/assets'))
-          .timeout(const Duration(seconds: 10));
-      if (response.statusCode == 200 &&
-          response.body.trimLeft().startsWith('[')) {
-        final parsed = <Asset>[];
-        for (final j in jsonDecode(response.body) as List) {
-          try {
-            parsed.add(Asset.fromBackendJson(j as Map<String, dynamic>));
-          } catch (e) {
-            debugPrint('Error parsing asset: $e  →  $j');
-          }
-        }
-        assets
-          ..clear()
-          ..addAll(parsed);
-      }
-    } catch (e) {
-      debugPrint('fetchAssetsFromBackend failed: $e');
-    }
-  }
-
-  /// Recarga los activos desde el backend y notifica la UI.
-  Future<void> refreshAssets() async {
-    await _fetchAssetsFromBackend();
-    notifyListeners();
   }
 
   void seedData() {
@@ -1162,23 +1134,39 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
-  /// Recarga los activos desde el backend (usado por pull-to-refresh).
+  /// Recarga los activos desde el backend. Única fuente de verdad.
+  /// Usa lista temporal para que un fallo de parseo no vacíe la lista.
+  /// Guarda el error en [assetsLoadError] para que la UI lo muestre.
   Future<void> loadAssetsFromBackend() async {
     try {
       final response = await http
           .get(Uri.parse('$_backendUrl/api/assets'))
-          .timeout(const Duration(seconds: 10));
+          .timeout(const Duration(seconds: 15));
       if (response.statusCode == 200 &&
           response.body.trimLeft().startsWith('[')) {
-        assets.clear();
+        final parsed = <Asset>[];
         for (final j in jsonDecode(response.body) as List) {
-          assets.add(Asset.fromBackendJson(j as Map<String, dynamic>));
+          try {
+            parsed.add(Asset.fromBackendJson(j as Map<String, dynamic>));
+          } catch (e) {
+            debugPrint('Error parseando activo: $e  raw: $j');
+          }
         }
-        notifyListeners();
+        assets
+          ..clear()
+          ..addAll(parsed);
+        assetsLoadError = null;
+      } else {
+        assetsLoadError =
+            'El servidor respondió inesperadamente (${response.statusCode}). '
+            'Respuesta: ${response.body.substring(0, response.body.length.clamp(0, 200))}';
+        debugPrint('loadAssetsFromBackend unexpected: $assetsLoadError');
       }
     } catch (e) {
+      assetsLoadError = e.toString();
       debugPrint('loadAssetsFromBackend failed: $e');
     }
+    notifyListeners();
   }
 
   void markNotificationRead(AppNotification n) {
@@ -1771,7 +1759,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      widget.state.refreshAssets();
+      widget.state.loadAssetsFromBackend();
     }
   }
 
@@ -2659,6 +2647,41 @@ class _AssetsPageState extends State<AssetsPage> {
             ],
           ),
           const SizedBox(height: 12),
+          if (widget.state.assetsLoadError != null)
+            Card(
+              color: Theme.of(context).colorScheme.errorContainer,
+              child: ListTile(
+                leading: Icon(
+                  Icons.cloud_off,
+                  color: Theme.of(context).colorScheme.onErrorContainer,
+                ),
+                title: Text(
+                  'Error al cargar activos desde el servidor',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onErrorContainer,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                subtitle: Text(
+                  widget.state.assetsLoadError!,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onErrorContainer,
+                    fontSize: 11,
+                  ),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: IconButton(
+                  icon: Icon(
+                    Icons.refresh,
+                    color: Theme.of(context).colorScheme.onErrorContainer,
+                  ),
+                  tooltip: 'Reintentar',
+                  onPressed: widget.state.loadAssetsFromBackend,
+                ),
+              ),
+            ),
+          if (widget.state.assetsLoadError != null) const SizedBox(height: 8),
           Expanded(
             child: RefreshIndicator(
               onRefresh: widget.state.loadAssetsFromBackend,
