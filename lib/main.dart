@@ -1052,27 +1052,90 @@ class AppState extends ChangeNotifier {
   void updateAsset(
     Asset asset, {
     required String performedBy,
+    String? newName,
+    String? newCategory,
+    String? newSubcategory,
     String? newResponsible,
+    String? newResponsibleId,
     String? newLocation,
+    String? newDependency,
+    String? newCostCenter,
+    double? newAcquisitionValue,
+    DateTime? newAcquisitionDate,
+    int? newUsefulLifeYears,
     AssetState? newState,
     String? notes,
+    String? newProgram,
+    String? newPhotoBase64,
+    bool clearPhoto = false,
   }) {
     final changes = <String>[];
+    if (newName != null && newName != asset.name) {
+      changes.add('Nombre: ${asset.name} -> $newName');
+      asset.name = newName;
+    }
+    if (newCategory != null && newCategory != asset.category) {
+      changes.add('Categoria: ${asset.category} -> $newCategory');
+      asset.category = newCategory;
+    }
+    if (newSubcategory != null && newSubcategory != asset.subcategory) {
+      changes.add('Subcategoria: ${asset.subcategory} -> $newSubcategory');
+      asset.subcategory = newSubcategory;
+    }
     if (newResponsible != null && newResponsible != asset.responsible) {
       changes.add('Responsable: ${asset.responsible} -> $newResponsible');
       asset.responsible = newResponsible;
+    }
+    if (newResponsibleId != null && newResponsibleId != asset.responsibleId) {
+      asset.responsibleId = newResponsibleId;
     }
     if (newLocation != null && newLocation != asset.physicalLocation) {
       changes.add('Ubicacion: ${asset.physicalLocation} -> $newLocation');
       asset.physicalLocation = newLocation;
     }
+    if (newDependency != null && newDependency != asset.dependency) {
+      changes.add('Dependencia: ${asset.dependency} -> $newDependency');
+      asset.dependency = newDependency;
+    }
+    if (newCostCenter != null && newCostCenter != asset.costCenter) {
+      changes.add('Centro de costo: ${asset.costCenter} -> $newCostCenter');
+      asset.costCenter = newCostCenter;
+    }
+    if (newAcquisitionValue != null &&
+        newAcquisitionValue != asset.acquisitionValue) {
+      changes.add('Valor: ${asset.acquisitionValue} -> $newAcquisitionValue');
+      asset.acquisitionValue = newAcquisitionValue;
+    }
+    if (newAcquisitionDate != null &&
+        newAcquisitionDate != asset.acquisitionDate) {
+      changes.add('Fecha adquisicion actualizada');
+      asset.acquisitionDate = newAcquisitionDate;
+    }
+    if (newUsefulLifeYears != null &&
+        newUsefulLifeYears != asset.estimatedUsefulLifeYears) {
+      changes.add(
+        'Vida util: ${asset.estimatedUsefulLifeYears} -> $newUsefulLifeYears años',
+      );
+      asset.estimatedUsefulLifeYears = newUsefulLifeYears;
+    }
     if (newState != null && newState != asset.state) {
       changes.add('Estado: ${asset.state.label} -> ${newState.label}');
       asset.state = newState;
     }
-    if (notes != null && notes.trim().isNotEmpty) {
-      changes.add('Observaciones: $notes');
+    if (notes != null && notes != asset.observations) {
+      changes.add('Observaciones actualizadas');
       asset.observations = notes;
+    }
+    if (newProgram != null && newProgram != asset.program) {
+      changes.add('Programa: ${asset.program} -> $newProgram');
+      asset.program = newProgram;
+    }
+    if (clearPhoto) {
+      asset.photoBase64 = null;
+      changes.add('Foto eliminada');
+    } else if (newPhotoBase64 != null && newPhotoBase64 != asset.photoBase64) {
+      asset.photoBase64 = newPhotoBase64;
+      changes.add('Foto actualizada');
     }
     if (changes.isNotEmpty) {
       asset.history.add(
@@ -1086,19 +1149,44 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       // Persistir cambios en el backend
       final patchBody = <String, dynamic>{};
+      if (newName != null) patchBody['name'] = asset.name;
+      if (newCategory != null) patchBody['category'] = asset.category;
+      if (newSubcategory != null) patchBody['subcategory'] = asset.subcategory;
       if (newResponsible != null) patchBody['responsible'] = asset.responsible;
       if (newLocation != null)
         patchBody['physical_location'] = asset.physicalLocation;
+      if (newDependency != null) patchBody['dependency'] = asset.dependency;
+      if (newCostCenter != null) patchBody['cost_center'] = asset.costCenter;
+      if (newAcquisitionValue != null)
+        patchBody['acquisition_value'] = asset.acquisitionValue;
+      if (newAcquisitionDate != null)
+        patchBody['acquisition_date'] = asset.acquisitionDate.toIso8601String();
+      if (newUsefulLifeYears != null)
+        patchBody['estimated_useful_life_years'] =
+            asset.estimatedUsefulLifeYears;
       if (newState != null) patchBody['state'] = asset.state.name;
-      if (notes != null && notes.trim().isNotEmpty)
-        patchBody['observations'] = asset.observations;
+      if (notes != null) patchBody['observations'] = asset.observations;
+      if (newProgram != null) patchBody['program'] = asset.program;
+      if (clearPhoto) {
+        patchBody['photo_base64'] = null;
+      } else if (newPhotoBase64 != null) {
+        patchBody['photo_base64'] = asset.photoBase64;
+      }
+      // Si hay foto en el payload usamos un timeout mayor
+      final hasPhotoPayload =
+          patchBody.containsKey('photo_base64') &&
+          patchBody['photo_base64'] != null;
       http
           .patch(
             Uri.parse('$_backendUrl/api/assets/${asset.code}'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode(patchBody),
           )
-          .timeout(const Duration(seconds: 10))
+          .timeout(
+            hasPhotoPayload
+                ? const Duration(seconds: 60)
+                : const Duration(seconds: 10),
+          )
           .then((res) {
             if (res.statusCode == 200) {
               http
@@ -3114,106 +3202,497 @@ class _AssetsPageState extends State<AssetsPage> {
   }
 
   Future<void> _editAssetDialog(BuildContext context, Asset asset) async {
-    final responsible = TextEditingController(text: asset.responsible);
-    final location = TextEditingController(text: asset.physicalLocation);
-    final notes = TextEditingController(text: asset.observations);
+    final nameCtrl = TextEditingController(text: asset.name);
+    final categoryCtrl = TextEditingController(text: asset.category);
+    final subcategoryCtrl = TextEditingController(text: asset.subcategory);
+    final locationCtrl = TextEditingController(text: asset.physicalLocation);
+    final dependencyCtrl = TextEditingController(text: asset.dependency);
+    final costCenterCtrl = TextEditingController(text: asset.costCenter);
+    final valueCtrl = TextEditingController(
+      text: asset.acquisitionValue > 0
+          ? asset.acquisitionValue.toStringAsFixed(2)
+          : '',
+    );
+    final usefulLifeCtrl = TextEditingController(
+      text: asset.estimatedUsefulLifeYears.toString(),
+    );
+    final programCtrl = TextEditingController(text: asset.program);
+    final notesCtrl = TextEditingController(text: asset.observations);
     AssetState selectedState = asset.state;
+    DateTime selectedDate = asset.acquisitionDate;
+
+    // Responsable: buscar usuario existente o dejar como texto libre
+    AppUser? selectedResponsible = widget.state.users
+        .where((u) => u.isActive)
+        .cast<AppUser?>()
+        .firstWhere(
+          (u) => u!.fullName == asset.responsible,
+          orElse: () => null,
+        );
+    final responsibleFreeCtrl = TextEditingController(
+      text: selectedResponsible == null ? asset.responsible : '',
+    );
 
     await showDialog<void>(
       context: context,
-      builder: (context) {
+      builder: (dialogContext) {
         String? errorMsg;
+        // foto: null = sin cambio, bytes = nueva foto
+        Uint8List? newPhotoBytes;
+        // Mantener referencia a foto actual para poder eliminarla
+        bool clearCurrentPhoto = false;
+
+        Future<void> pickPhoto(ImageSource source, StateSetter setLocal) async {
+          try {
+            final picker = ImagePicker();
+            final photo = await picker.pickImage(
+              source: source,
+              imageQuality: 72,
+              maxWidth: 1200,
+            );
+            if (photo != null) {
+              final bytes = await photo.readAsBytes();
+              setLocal(() {
+                newPhotoBytes = bytes;
+                clearCurrentPhoto = false;
+              });
+            }
+          } catch (_) {}
+        }
+
         return StatefulBuilder(
-          builder: (context, setLocal) {
+          builder: (dialogContext, setLocal) {
+            // Foto a mostrar: nueva seleccionada, la actual, o nada
+            final currentBase64 = clearCurrentPhoto ? null : asset.photoBase64;
+            final showBytes = newPhotoBytes;
+            final hasPhoto =
+                showBytes != null ||
+                (currentBase64 != null && currentBase64.isNotEmpty);
+
             return AlertDialog(
-              title: Text('Actualizar ${asset.code}'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (errorMsg != null)
-                    Container(
-                      width: double.infinity,
-                      margin: const EdgeInsets.only(bottom: 12),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.red.shade50,
-                        border: Border.all(color: Colors.red.shade300),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.error_outline,
-                            color: Colors.red,
-                            size: 18,
+              title: Text('Editar ${asset.code}'),
+              content: SizedBox(
+                width: 480,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // ── Error banner ──────────────────────────────────────
+                      if (errorMsg != null)
+                        Container(
+                          width: double.infinity,
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
                           ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              errorMsg!,
-                              style: TextStyle(
-                                color: Colors.red.shade800,
-                                fontSize: 13,
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade50,
+                            border: Border.all(color: Colors.red.shade300),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.error_outline,
+                                color: Colors.red,
+                                size: 18,
                               ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  errorMsg!,
+                                  style: TextStyle(
+                                    color: Colors.red.shade800,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      // ── Campos ────────────────────────────────────────────
+                      _field(nameCtrl, 'Nombre / descripción *'),
+                      _field(categoryCtrl, 'Categoría *'),
+                      _field(subcategoryCtrl, 'Subcategoría'),
+                      const SizedBox(height: 8),
+                      // Responsable: dropdown si hay usuarios, sino texto libre
+                      widget.state.users.any((u) => u.isActive)
+                          ? DropdownButtonFormField<AppUser?>(
+                              value: selectedResponsible,
+                              decoration: const InputDecoration(
+                                labelText: 'Responsable *',
+                                border: OutlineInputBorder(),
+                              ),
+                              items: [
+                                const DropdownMenuItem<AppUser?>(
+                                  value: null,
+                                  child: Text('— Texto libre —'),
+                                ),
+                                ...widget.state.users
+                                    .where((u) => u.isActive)
+                                    .map(
+                                      (u) => DropdownMenuItem<AppUser?>(
+                                        value: u,
+                                        child: Text(
+                                          '${u.fullName}${u.area.isNotEmpty ? ' — ${u.area}' : ''}',
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ),
+                              ],
+                              onChanged: (u) {
+                                setLocal(() {
+                                  selectedResponsible = u;
+                                  if (u != null) {
+                                    responsibleFreeCtrl.text = '';
+                                    dependencyCtrl.text = u.area;
+                                  }
+                                });
+                              },
+                            )
+                          : const SizedBox.shrink(),
+                      if (selectedResponsible == null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: _field(responsibleFreeCtrl, 'Responsable *'),
+                        ),
+                      const SizedBox(height: 8),
+                      _field(dependencyCtrl, 'Área / Dependencia *'),
+                      _field(locationCtrl, 'Ubicación física *'),
+                      _field(costCenterCtrl, 'Centro de costo'),
+                      _field(programCtrl, 'Programa académico'),
+                      _field(valueCtrl, 'Valor de adquisición'),
+                      _field(usefulLifeCtrl, 'Vida útil (años)'),
+                      // Fecha de adquisición
+                      const SizedBox(height: 8),
+                      InkWell(
+                        onTap: () async {
+                          final picked = await showDatePicker(
+                            context: dialogContext,
+                            initialDate: selectedDate,
+                            firstDate: DateTime(1990),
+                            lastDate: DateTime.now(),
+                          );
+                          if (picked != null) {
+                            setLocal(() => selectedDate = picked);
+                          }
+                        },
+                        child: InputDecorator(
+                          decoration: const InputDecoration(
+                            labelText: 'Fecha de adquisición',
+                            border: OutlineInputBorder(),
+                            suffixIcon: Icon(Icons.calendar_today_outlined),
+                          ),
+                          child: Text(
+                            DateFormat('yyyy-MM-dd').format(selectedDate),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      DropdownButtonFormField<AssetState>(
+                        value: selectedState,
+                        decoration: const InputDecoration(
+                          labelText: 'Estado',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: AssetState.values
+                            .map(
+                              (s) => DropdownMenuItem<AssetState>(
+                                value: s,
+                                child: Text(s.label),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (v) {
+                          if (v != null) setLocal(() => selectedState = v);
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      _field(notesCtrl, 'Observaciones'),
+                      const SizedBox(height: 8),
+                      // ── Foto del activo ───────────────────────────────────
+                      GestureDetector(
+                        onTap: () {
+                          showDialog<void>(
+                            context: dialogContext,
+                            builder: (ctx) => SimpleDialog(
+                              title: const Text('Foto del activo'),
+                              children: [
+                                SimpleDialogOption(
+                                  onPressed: () {
+                                    Navigator.pop(ctx);
+                                    pickPhoto(ImageSource.camera, setLocal);
+                                  },
+                                  child: const Row(
+                                    children: [
+                                      Icon(Icons.camera_alt_outlined),
+                                      SizedBox(width: 10),
+                                      Text('Tomar foto'),
+                                    ],
+                                  ),
+                                ),
+                                SimpleDialogOption(
+                                  onPressed: () {
+                                    Navigator.pop(ctx);
+                                    pickPhoto(ImageSource.gallery, setLocal);
+                                  },
+                                  child: const Row(
+                                    children: [
+                                      Icon(Icons.photo_library_outlined),
+                                      SizedBox(width: 10),
+                                      Text('Seleccionar de galería'),
+                                    ],
+                                  ),
+                                ),
+                                if (hasPhoto)
+                                  SimpleDialogOption(
+                                    onPressed: () {
+                                      Navigator.pop(ctx);
+                                      setLocal(() {
+                                        newPhotoBytes = null;
+                                        clearCurrentPhoto = true;
+                                      });
+                                    },
+                                    child: const Row(
+                                      children: [
+                                        Icon(
+                                          Icons.delete_outline,
+                                          color: Colors.red,
+                                        ),
+                                        SizedBox(width: 10),
+                                        Text(
+                                          'Eliminar foto',
+                                          style: TextStyle(color: Colors.red),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          );
+                        },
+                        child: Container(
+                          width: double.infinity,
+                          height: hasPhoto ? 200 : 100,
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade100,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: const Color(
+                                0xFF00804E,
+                              ).withValues(alpha: 0.4),
                             ),
                           ),
-                        ],
+                          clipBehavior: Clip.antiAlias,
+                          child: hasPhoto
+                              ? Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    showBytes != null
+                                        ? Image.memory(
+                                            showBytes,
+                                            fit: BoxFit.cover,
+                                          )
+                                        : Image.memory(
+                                            base64Decode(currentBase64!),
+                                            fit: BoxFit.cover,
+                                          ),
+                                    Positioned(
+                                      top: 6,
+                                      right: 6,
+                                      child: CircleAvatar(
+                                        radius: 14,
+                                        backgroundColor: Colors.black54,
+                                        child: IconButton(
+                                          padding: EdgeInsets.zero,
+                                          icon: const Icon(
+                                            Icons.edit,
+                                            size: 14,
+                                            color: Colors.white,
+                                          ),
+                                          onPressed: () {
+                                            showDialog<void>(
+                                              context: dialogContext,
+                                              builder: (ctx) => SimpleDialog(
+                                                title: const Text(
+                                                  'Foto del activo',
+                                                ),
+                                                children: [
+                                                  SimpleDialogOption(
+                                                    onPressed: () {
+                                                      Navigator.pop(ctx);
+                                                      pickPhoto(
+                                                        ImageSource.camera,
+                                                        setLocal,
+                                                      );
+                                                    },
+                                                    child: const Row(
+                                                      children: [
+                                                        Icon(
+                                                          Icons
+                                                              .camera_alt_outlined,
+                                                        ),
+                                                        SizedBox(width: 10),
+                                                        Text('Tomar foto'),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  SimpleDialogOption(
+                                                    onPressed: () {
+                                                      Navigator.pop(ctx);
+                                                      pickPhoto(
+                                                        ImageSource.gallery,
+                                                        setLocal,
+                                                      );
+                                                    },
+                                                    child: const Row(
+                                                      children: [
+                                                        Icon(
+                                                          Icons
+                                                              .photo_library_outlined,
+                                                        ),
+                                                        SizedBox(width: 10),
+                                                        Text(
+                                                          'Seleccionar de galería',
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  SimpleDialogOption(
+                                                    onPressed: () {
+                                                      Navigator.pop(ctx);
+                                                      setLocal(() {
+                                                        newPhotoBytes = null;
+                                                        clearCurrentPhoto =
+                                                            true;
+                                                      });
+                                                    },
+                                                    child: const Row(
+                                                      children: [
+                                                        Icon(
+                                                          Icons.delete_outline,
+                                                          color: Colors.red,
+                                                        ),
+                                                        SizedBox(width: 10),
+                                                        Text(
+                                                          'Eliminar foto',
+                                                          style: TextStyle(
+                                                            color: Colors.red,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                )
+                              : Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      Icons.add_a_photo_outlined,
+                                      size: 32,
+                                      color: const Color(
+                                        0xFF00804E,
+                                      ).withValues(alpha: 0.6),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      'Agregar foto del activo (opcional)',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey.shade500,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                        ),
                       ),
-                    ),
-                  _field(responsible, 'Responsable *'),
-                  _field(location, 'Ubicación *'),
-                  _field(notes, 'Observaciones'),
-                  DropdownButtonFormField<AssetState>(
-                    value: selectedState,
-                    items: AssetState.values
-                        .map(
-                          (s) => DropdownMenuItem<AssetState>(
-                            value: s,
-                            child: Text(s.label),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (v) {
-                      if (v != null) {
-                        setLocal(() => selectedState = v);
-                      }
-                    },
-                    decoration: const InputDecoration(labelText: 'Estado'),
+                    ],
                   ),
-                ],
+                ),
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: () => Navigator.pop(dialogContext),
                   child: const Text('Cancelar'),
                 ),
                 FilledButton(
                   onPressed: () {
-                    if (responsible.text.trim().isEmpty) {
+                    final nameVal = nameCtrl.text.trim();
+                    final catVal = categoryCtrl.text.trim();
+                    final locVal = locationCtrl.text.trim();
+                    final depVal = dependencyCtrl.text.trim();
+                    final responsibleName = selectedResponsible != null
+                        ? selectedResponsible!.fullName
+                        : responsibleFreeCtrl.text.trim();
+
+                    if (nameVal.isEmpty) {
+                      setLocal(
+                        () => errorMsg =
+                            'El nombre / descripción es obligatorio.',
+                      );
+                      return;
+                    }
+                    if (catVal.isEmpty) {
+                      setLocal(() => errorMsg = 'La categoría es obligatoria.');
+                      return;
+                    }
+                    if (responsibleName.isEmpty) {
                       setLocal(
                         () => errorMsg = 'El responsable es obligatorio.',
                       );
                       return;
                     }
-                    if (location.text.trim().isEmpty) {
+                    if (locVal.isEmpty) {
                       setLocal(
                         () => errorMsg = 'La ubicación física es obligatoria.',
                       );
                       return;
                     }
+                    if (depVal.isEmpty) {
+                      setLocal(
+                        () =>
+                            errorMsg = 'El área / dependencia es obligatoria.',
+                      );
+                      return;
+                    }
+
                     widget.state.updateAsset(
                       asset,
                       performedBy:
                           widget.state.currentUser?.username ?? 'system',
-                      newResponsible: responsible.text.trim(),
-                      newLocation: location.text.trim(),
+                      newName: nameVal,
+                      newCategory: catVal,
+                      newSubcategory: subcategoryCtrl.text.trim(),
+                      newResponsible: responsibleName,
+                      newResponsibleId: selectedResponsible?.id,
+                      newLocation: locVal,
+                      newDependency: depVal,
+                      newCostCenter: costCenterCtrl.text.trim(),
+                      newAcquisitionValue: double.tryParse(
+                        valueCtrl.text.trim(),
+                      ),
+                      newAcquisitionDate: selectedDate,
+                      newUsefulLifeYears: int.tryParse(
+                        usefulLifeCtrl.text.trim(),
+                      ),
                       newState: selectedState,
-                      notes: notes.text.trim(),
+                      notes: notesCtrl.text.trim(),
+                      newProgram: programCtrl.text.trim(),
+                      newPhotoBase64: newPhotoBytes != null
+                          ? base64Encode(newPhotoBytes!)
+                          : null,
+                      clearPhoto: clearCurrentPhoto,
                     );
-                    Navigator.pop(context);
+                    Navigator.pop(dialogContext);
                   },
                   child: const Text('Guardar cambios'),
                 ),
