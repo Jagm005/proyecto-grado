@@ -33,6 +33,8 @@ services:
       DB_USER: postgres
       DB_PASSWORD: postgres
       PORT: 3000
+      JWT_SECRET: ${JWT_SECRET:-cambia_este_secreto_en_produccion}
+      JWT_EXPIRES_IN: 8h
     depends_on:
       db:
         condition: service_healthy

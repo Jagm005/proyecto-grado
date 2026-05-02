@@ -1,6 +1,7 @@
 const express = require('express');
 const helmet  = require('helmet');
 const cors    = require('cors');
+require('dotenv').config();
 
 const authRouter       = require('./routes/auth');
 const usersRouter      = require('./routes/users');
@@ -8,6 +9,7 @@ const assetsRouter     = require('./routes/assets');
 const inventoryRouter  = require('./routes/inventory');
 const maintenanceRouter= require('./routes/maintenance');
 const disposalRouter   = require('./routes/disposal');
+const requireAuth      = require('./middleware/auth');
 
 const pool = require('./db');
 const app  = express();
@@ -27,12 +29,12 @@ app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 // ---- Rutas ----
-app.use('/api/auth',         authRouter);
-app.use('/api/users',        usersRouter);
-app.use('/api/assets',       assetsRouter);
-app.use('/api/inventory',    inventoryRouter);
-app.use('/api/maintenance',  maintenanceRouter);
-app.use('/api/disposal',     disposalRouter);
+app.use('/api/auth',         authRouter);                    // rutas públicas
+app.use('/api/users',        requireAuth, usersRouter);
+app.use('/api/assets',       requireAuth, assetsRouter);
+app.use('/api/inventory',    requireAuth, inventoryRouter);
+app.use('/api/maintenance',  requireAuth, maintenanceRouter);
+app.use('/api/disposal',     requireAuth, disposalRouter);
 
 // ---- Manejo de errores global ----
 app.use((err, _req, res, _next) => {

@@ -1,5 +1,9 @@
 const router = require('express').Router();
+const jwt    = require('jsonwebtoken');
 const pool   = require('../db');
+
+const JWT_SECRET  = process.env.JWT_SECRET;
+const JWT_EXPIRES = process.env.JWT_EXPIRES_IN || '8h';
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_MINUTES        = 1;
@@ -63,16 +67,30 @@ router.post('/login', async (req, res, next) => {
       [user.id],
     );
 
+    const roles = Array.isArray(user.roles)
+      ? user.roles
+      : String(user.roles).replace(/^{|}$/g, '').split(',').filter(Boolean);
+
+    const payload = {
+      id:       user.id,
+      username: user.username,
+      roles,
+      area:     user.area ?? '',
+    };
+
+    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+
     return res.json({
-      id:        user.id,
-      username:  user.username,
-      fullName:  user.full_name,
-      email:     user.email,
-      roles:     Array.isArray(user.roles)
-                   ? user.roles
-                   : String(user.roles).replace(/^{|}$/g, '').split(',').filter(Boolean),
-      area:      user.area ?? '',
-      isActive:  user.is_active,
+      token,
+      user: {
+        id:       user.id,
+        username: user.username,
+        fullName: user.full_name,
+        email:    user.email,
+        roles,
+        area:     user.area ?? '',
+        isActive: user.is_active,
+      },
     });
   } catch (err) {
     next(err);
@@ -113,16 +131,30 @@ router.post('/google-login', async (req, res, next) => {
       [user.id],
     );
 
+    const roles = Array.isArray(user.roles)
+      ? user.roles
+      : String(user.roles).replace(/^{|}$/g, '').split(',').filter(Boolean);
+
+    const payload = {
+      id:       user.id,
+      username: user.username,
+      roles,
+      area:     user.area ?? '',
+    };
+
+    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+
     return res.json({
-      id:        user.id,
-      username:  user.username,
-      fullName:  user.full_name,
-      email:     user.email,
-      roles:     Array.isArray(user.roles)
-                   ? user.roles
-                   : String(user.roles).replace(/^{|}$/g, '').split(',').filter(Boolean),
-      area:      user.area ?? '',
-      isActive:  user.is_active,
+      token,
+      user: {
+        id:       user.id,
+        username: user.username,
+        fullName: user.full_name,
+        email:    user.email,
+        roles,
+        area:     user.area ?? '',
+        isActive: user.is_active,
+      },
     });
   } catch (err) {
     next(err);
