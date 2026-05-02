@@ -206,21 +206,46 @@ class AppUser {
     email: (j['email'] as String?) ?? '',
     password: '', // nunca se retorna desde el backend
     area: (j['area'] as String?) ?? '',
-    roles: ((j['roles'] as List?) ?? [])
-        .map((r) {
-          try {
-            return UserRole.values.byName(r as String);
-          } catch (_) {
-            return null;
-          }
-        })
-        .whereType<UserRole>()
-        .toList(),
+    roles: _parseBackendRoles(j['roles']),
     isActive: (j['is_active'] as bool?) ?? true,
     lastSession: j['last_session'] != null
         ? DateTime.tryParse(j['last_session'] as String)
         : null,
   );
+
+  /// Parsea el campo `roles` del backend, que puede llegar como:
+  ///   - JSON array: ["administrador","soporteTI"]  (backend correcto)
+  ///   - PostgreSQL array literal: "{administrador,soporteTI}" (pg sin cast)
+  static List<UserRole> _parseBackendRoles(dynamic raw) {
+    List<String> names;
+    if (raw is List) {
+      names = raw.whereType<String>().toList();
+    } else if (raw is String) {
+      final s = raw.trim();
+      if (s.startsWith('{') && s.endsWith('}')) {
+        names = s
+            .substring(1, s.length - 1)
+            .split(',')
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
+      } else {
+        names = [];
+      }
+    } else {
+      names = [];
+    }
+    return names
+        .map((name) {
+          try {
+            return UserRole.values.byName(name);
+          } catch (_) {
+            return null;
+          }
+        })
+        .whereType<UserRole>()
+        .toList();
+  }
 }
 
 class AssetHistoryEvent {
