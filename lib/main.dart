@@ -197,6 +197,30 @@ class AppUser {
         ? DateTime.parse(j['lockUntil'] as String)
         : null,
   );
+
+  /// Construye un [AppUser] desde la respuesta snake_case del backend REST.
+  factory AppUser.fromBackendJson(Map<String, dynamic> j) => AppUser(
+    id: j['id'] as String,
+    username: j['username'] as String,
+    fullName: (j['full_name'] as String?) ?? '',
+    email: (j['email'] as String?) ?? '',
+    password: '', // nunca se retorna desde el backend
+    area: (j['area'] as String?) ?? '',
+    roles: ((j['roles'] as List?) ?? [])
+        .map((r) {
+          try {
+            return UserRole.values.byName(r as String);
+          } catch (_) {
+            return null;
+          }
+        })
+        .whereType<UserRole>()
+        .toList(),
+    isActive: (j['is_active'] as bool?) ?? true,
+    lastSession: j['last_session'] != null
+        ? DateTime.tryParse(j['last_session'] as String)
+        : null,
+  );
 }
 
 class AssetHistoryEvent {
@@ -219,13 +243,15 @@ class AssetHistoryEvent {
     'performedBy': performedBy,
   };
 
-  factory AssetHistoryEvent.fromJson(Map<String, dynamic> j) =>
-      AssetHistoryEvent(
-        timestamp: DateTime.parse(j['timestamp'] as String),
-        action: j['action'] as String,
-        detail: j['detail'] as String,
-        performedBy: j['performedBy'] as String,
-      );
+  factory AssetHistoryEvent.fromJson(
+    Map<String, dynamic> j,
+  ) => AssetHistoryEvent(
+    timestamp: DateTime.parse(j['timestamp'] as String),
+    action: j['action'] as String,
+    detail: j['detail'] as String,
+    // Soporta tanto camelCase (almacenamiento local) como snake_case (backend REST)
+    performedBy: (j['performedBy'] ?? j['performed_by'] ?? '') as String,
+  );
 }
 
 class Asset {
@@ -336,7 +362,11 @@ class Asset {
       state: AssetState.values.byName((j['state'] as String?) ?? 'activo'),
       observations: (j['observations'] as String?) ?? '',
       program: (j['program'] as String?) ?? '',
-      photoBase64: photoVal as String?,
+      photoBase64: photoVal != null
+          ? (photoVal as String).contains(',')
+                ? (photoVal as String).split(',').last
+                : photoVal as String
+          : null,
       history:
           (j['history'] as List?)
               ?.map(
@@ -419,6 +449,9 @@ class AppState extends ChangeNotifier {
   /// null = sin error, String = mensaje del último fallo al cargar activos.
   String? assetsLoadError;
 
+  /// null = sin error, String = mensaje del último fallo al cargar usuarios.
+  String? usersLoadError;
+
   int get unreadCount =>
       notifications.where((n) => !n.read && _notifVisibleToMe(n)).length;
 
@@ -447,18 +480,14 @@ class AppState extends ChangeNotifier {
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
 
-    final usersData = prefs.getString('users');
-    if (usersData != null) {
-      users.clear();
-      for (final j in jsonDecode(usersData) as List) {
-        users.add(AppUser.fromJson(j as Map<String, dynamic>));
-      }
-    }
-
-    // Limpiar caché viejo de activos (ahora el backend es la única fuente de verdad).
+    // Limpiar cachés locales: el backend es la única fuente de verdad.
     await prefs.remove('assets');
+    await prefs.remove('users');
 
-    // Cargar activos desde el backend.
+    // Cargar usuarios primero (secuencial) para evitar race condition:
+    // loadAssetsFromBackend() llama notifyListeners() → _save() al final,
+    // y necesitamos que los usuarios del backend ya estén en memoria.
+    await loadUsersFromBackend();
     await loadAssetsFromBackend();
 
     final notifData = prefs.getString('notifications');
@@ -469,18 +498,56 @@ class AppState extends ChangeNotifier {
       }
     }
 
-    if (users.isEmpty) {
+    // Solo usar seedData si el backend falló con error de red (no se pudo conectar).
+    // Si el backend respondió correctamente (aunque con 0 usuarios), no sobreescribir.
+    if (users.isEmpty && usersLoadError != null) {
       seedData();
     }
   }
 
+  /// Carga la lista de usuarios desde el backend REST.
+  /// Guarda el error en [usersLoadError] para que la UI lo muestre.
+  Future<void> loadUsersFromBackend() async {
+    try {
+      final response = await http
+          .get(Uri.parse('$_backendUrl/api/users'))
+          .timeout(const Duration(seconds: 30));
+      debugPrint(
+        '[loadUsers] respuesta ${response.statusCode}, tamaño=${response.body.length} bytes',
+      );
+      if (response.statusCode == 200 &&
+          response.body.trimLeft().startsWith('[')) {
+        final parsed = <AppUser>[];
+        for (final j in jsonDecode(response.body) as List) {
+          try {
+            parsed.add(AppUser.fromBackendJson(j as Map<String, dynamic>));
+          } catch (e) {
+            debugPrint('Error parseando usuario: $e  raw: $j');
+          }
+        }
+        users
+          ..clear()
+          ..addAll(parsed);
+        usersLoadError = null;
+        debugPrint(
+          '[loadUsers] ${parsed.length} usuarios cargados desde backend',
+        );
+      } else {
+        usersLoadError =
+            'El servidor respondió inesperadamente (${response.statusCode}). '
+            'Respuesta: ${response.body.substring(0, response.body.length.clamp(0, 200))}';
+        debugPrint('loadUsersFromBackend unexpected: $usersLoadError');
+      }
+    } catch (e) {
+      usersLoadError = e.toString();
+      debugPrint('loadUsersFromBackend failed: $e');
+    }
+    notifyListeners();
+  }
+
   Future<void> _save() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      'users',
-      jsonEncode(users.map((u) => u.toJson()).toList()),
-    );
-    // Los activos NO se persisten localmente; el backend es la fuente de verdad.
+    // Usuarios y activos NO se persisten localmente; el backend es la fuente de verdad.
     await prefs.setString(
       'notifications',
       jsonEncode(notifications.map((n) => n.toJson()).toList()),
@@ -529,50 +596,7 @@ class AppState extends ChangeNotifier {
         roles: [UserRole.direccionAdminFin],
       ),
     ]);
-
-    addAsset(
-      Asset(
-        code: 'ACT-1001',
-        name: 'Laptop Dell 5420',
-        category: 'Computo',
-        subcategory: 'Portatil',
-        physicalLocation: 'Almacen e Inventarios',
-        responsible: 'Auxiliar Inventario',
-        responsibleId: 'U002',
-        dependency: 'Almacen e Inventarios',
-        costCenter: 'CC-ADM-01',
-        acquisitionValue: 3800000,
-        acquisitionDate: DateTime(2023, 4, 5),
-        estimatedUsefulLifeYears: 5,
-        state: AssetState.activo,
-        observations: 'Equipo en buen estado',
-        program: 'Administracion',
-      ),
-      performedBy: 'system',
-      localOnly: true,
-    );
-
-    addAsset(
-      Asset(
-        code: 'ACT-2002',
-        name: 'Silla Ergonomica',
-        category: 'Mobiliario',
-        subcategory: 'Silla',
-        physicalLocation: 'Direccion Administrativa',
-        responsible: 'Admin General',
-        responsibleId: 'U001',
-        dependency: 'Direccion Administrativa',
-        costCenter: 'CC-ADM-01',
-        acquisitionValue: 890000,
-        acquisitionDate: DateTime(2022, 8, 14),
-        estimatedUsefulLifeYears: 8,
-        state: AssetState.activo,
-        observations: 'Uso diario',
-        program: 'Administracion',
-      ),
-      performedBy: 'system',
-      localOnly: true,
-    );
+    // Los activos NO se semillan localmente: el backend es la única fuente de verdad.
   }
 
   bool hasRole(UserRole role) {
@@ -1289,6 +1313,32 @@ class AppState extends ChangeNotifier {
       debugPrint('loadAssetsFromBackend failed: $e');
     }
     notifyListeners();
+  }
+
+  /// Carga el historial de un activo desde el backend y lo actualiza en memoria.
+  /// Retorna la lista de eventos o lanza excepción si falla.
+  Future<List<AssetHistoryEvent>> loadAssetHistoryFromBackend(
+    String code,
+  ) async {
+    final response = await http
+        .get(Uri.parse('$_backendUrl/api/assets/$code'))
+        .timeout(const Duration(seconds: 15));
+    if (response.statusCode == 200) {
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final rawHistory = (body['history'] as List?) ?? [];
+      final events = rawHistory
+          .map((h) => AssetHistoryEvent.fromJson(h as Map<String, dynamic>))
+          .toList();
+      // Actualizar la instancia en memoria para que sea consistente
+      final asset = findAsset(code);
+      if (asset != null) {
+        asset.history
+          ..clear()
+          ..addAll(events);
+      }
+      return events;
+    }
+    throw Exception('Error ${response.statusCode} al cargar historial');
   }
 
   void markNotificationRead(AppNotification n) {
@@ -2182,6 +2232,15 @@ class UsersPage extends StatefulWidget {
 }
 
 class _UsersPageState extends State<UsersPage> {
+  @override
+  void initState() {
+    super.initState();
+    // Recargar lista de usuarios desde el backend cada vez que se abre la página.
+    widget.state.loadUsersFromBackend().then((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!widget.state.canManageUsers()) {
@@ -3786,6 +3845,25 @@ class _AssetsPageState extends State<AssetsPage> {
   }
 
   Future<void> _showHistory(BuildContext context, Asset asset) async {
+    // Mostrar indicador de carga mientras se obtiene el historial del backend
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    List<AssetHistoryEvent> history;
+    try {
+      history = await widget.state.loadAssetHistoryFromBackend(asset.code);
+    } catch (e) {
+      // Si falla la red, usar los eventos en memoria (puede estar vacío)
+      history = List.of(asset.history);
+      debugPrint('[_showHistory] Error cargando historial: $e');
+    }
+
+    if (!context.mounted) return;
+    Navigator.of(context).pop(); // cerrar indicador de carga
+
     await showDialog<void>(
       context: context,
       builder: (context) {
@@ -3793,19 +3871,21 @@ class _AssetsPageState extends State<AssetsPage> {
           title: Text('Historial ${asset.code}'),
           content: SizedBox(
             width: 520,
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: asset.history.length,
-              itemBuilder: (context, index) {
-                final item = asset.history[index];
-                return ListTile(
-                  title: Text(item.action),
-                  subtitle: Text(
-                    '${DateFormat('yyyy-MM-dd HH:mm').format(item.timestamp)} | ${item.performedBy}\n${item.detail}',
+            child: history.isEmpty
+                ? const Text('Sin eventos registrados.')
+                : ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: history.length,
+                    itemBuilder: (context, index) {
+                      final item = history[index];
+                      return ListTile(
+                        title: Text(item.action),
+                        subtitle: Text(
+                          '${DateFormat('yyyy-MM-dd HH:mm').format(item.timestamp)} | ${item.performedBy}\n${item.detail}',
+                        ),
+                      );
+                    },
                   ),
-                );
-              },
-            ),
           ),
           actions: [
             TextButton(
