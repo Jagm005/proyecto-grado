@@ -22,7 +22,6 @@ import 'package:google_sign_in/google_sign_in.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final state = AppState();
-  await state.load();
   runApp(InventoryApp(state: state));
 }
 
@@ -70,11 +69,51 @@ class InventoryApp extends StatelessWidget {
               scrolledUnderElevation: 2,
             ),
           ),
-          home: state.currentUser == null
-              ? LoginPage(state: state)
-              : HomePage(state: state),
+          home: SplashScreen(state: state),
         );
       },
+    );
+  }
+}
+
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key, required this.state});
+
+  final AppState state;
+
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen> {
+  @override
+  void initState() {
+    super.initState();
+    _initialize();
+  }
+
+  Future<void> _initialize() async {
+    await widget.state.load();
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => widget.state.currentUser == null
+            ? LoginPage(state: widget.state)
+            : HomePage(state: widget.state),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: Center(
+        child: Image.asset(
+          'assets/isologo-ucp.png',
+          width: 220,
+        ),
+      ),
     );
   }
 }
@@ -477,6 +516,15 @@ class AppState extends ChangeNotifier {
   /// null = sin error, String = mensaje del último fallo al cargar usuarios.
   String? usersLoadError;
 
+  /// Token JWT activo. Se asigna al hacer login y se borra al cerrar sesión.
+  String? _jwtToken;
+
+  /// Headers HTTP para peticiones autenticadas.
+  Map<String, String> get _authHeaders => {
+    'Content-Type': 'application/json',
+    if (_jwtToken != null) 'Authorization': 'Bearer $_jwtToken',
+  };
+
   int get unreadCount =>
       notifications.where((n) => !n.read && _notifVisibleToMe(n)).length;
 
@@ -509,11 +557,7 @@ class AppState extends ChangeNotifier {
     await prefs.remove('assets');
     await prefs.remove('users');
 
-    // Cargar usuarios primero (secuencial) para evitar race condition:
-    // loadAssetsFromBackend() llama notifyListeners() → _save() al final,
-    // y necesitamos que los usuarios del backend ya estén en memoria.
-    await loadUsersFromBackend();
-    await loadAssetsFromBackend();
+    // Los usuarios y activos se cargan después del login (requieren JWT).
 
     final notifData = prefs.getString('notifications');
     if (notifData != null) {
@@ -535,7 +579,7 @@ class AppState extends ChangeNotifier {
   Future<void> loadUsersFromBackend() async {
     try {
       final response = await http
-          .get(Uri.parse('$_backendUrl/api/users'))
+          .get(Uri.parse('$_backendUrl/api/users'), headers: _authHeaders)
           .timeout(const Duration(seconds: 30));
       debugPrint(
         '[loadUsers] respuesta ${response.statusCode}, tamaño=${response.body.length} bytes',
@@ -633,6 +677,29 @@ class AppState extends ChangeNotifier {
   bool canManageAssets() =>
       hasRole(UserRole.administrador) || hasRole(UserRole.auxiliarInventario);
 
+  /// Devuelve los activos visibles para el usuario actual.
+  /// Usuarios sin rol privilegiado (admin, auxiliar, DAF, auditor) solo ven
+  /// los activos de los que son responsables.
+  List<Asset> get visibleAssets {
+    final user = currentUser;
+    if (user == null) return [];
+    final isPrivileged = user.roles.any(
+      (r) =>
+          r == UserRole.administrador ||
+          r == UserRole.auxiliarInventario ||
+          r == UserRole.direccionAdminFin ||
+          r == UserRole.auditor,
+    );
+    if (isPrivileged) return assets;
+    return assets
+        .where(
+          (a) =>
+              a.responsibleId == user.id ||
+              a.responsible.toLowerCase() == user.fullName.toLowerCase(),
+        )
+        .toList();
+  }
+
   void reportMissingAsset({
     required String scannedCode,
     required String notes,
@@ -708,19 +775,24 @@ class AppState extends ChangeNotifier {
       final body = jsonDecode(response.body) as Map<String, dynamic>;
 
       if (response.statusCode == 200) {
-        final rawRoles = (body['roles'] as List).cast<String>();
+        final userData = (body['user'] ?? body) as Map<String, dynamic>;
+        final rawRoles = (userData['roles'] as List?)?.cast<String>() ?? [];
         final appUser = AppUser(
-          id: body['id'] as String,
-          username: body['username'] as String,
-          fullName: body['fullName'] as String,
-          email: body['email'] as String,
+          id: userData['id'] as String,
+          username: userData['username'] as String,
+          fullName: userData['fullName'] as String,
+          email: userData['email'] as String,
           password: '', // no almacenamos la contraseña en cliente
-          area: (body['area'] as String?) ?? '',
+          area: (userData['area'] as String?) ?? '',
           roles: rawRoles.map((r) => UserRole.values.byName(r)).toList(),
-          isActive: body['isActive'] as bool,
+          isActive: userData['isActive'] as bool,
         );
+        _jwtToken = body['token'] as String?;
         currentUser = appUser;
         notifyListeners();
+        // Cargar datos del backend ahora que tenemos token
+        await loadUsersFromBackend();
+        await loadAssetsFromBackend();
         return null;
       }
 
@@ -756,7 +828,7 @@ class AppState extends ChangeNotifier {
       final response = await http
           .patch(
             Uri.parse('$_backendUrl/api/users/${user.id}'),
-            headers: {'Content-Type': 'application/json'},
+            headers: _authHeaders,
             body: jsonEncode({'full_name': fullName}),
           )
           .timeout(const Duration(seconds: 10));
@@ -809,7 +881,7 @@ class AppState extends ChangeNotifier {
       final response = await http
           .patch(
             Uri.parse('$_backendUrl/api/users/${user.id}/password'),
-            headers: {'Content-Type': 'application/json'},
+            headers: _authHeaders,
             body: jsonEncode({'password': newPassword}),
           )
           .timeout(const Duration(seconds: 10));
@@ -827,6 +899,7 @@ class AppState extends ChangeNotifier {
 
   void logout() {
     currentUser = null;
+    _jwtToken = null;
     notifyListeners();
   }
 
@@ -876,7 +949,7 @@ class AppState extends ChangeNotifier {
     await http
         .patch(
           Uri.parse('$_backendUrl/api/users/${user.id}/password'),
-          headers: {'Content-Type': 'application/json'},
+          headers: _authHeaders,
           body: jsonEncode({'password': password}),
         )
         .timeout(const Duration(seconds: 10));
@@ -912,7 +985,7 @@ class AppState extends ChangeNotifier {
       final response = await http
           .post(
             Uri.parse('$_backendUrl/api/users'),
-            headers: {'Content-Type': 'application/json'},
+            headers: _authHeaders,
             body: jsonEncode({
               'id': user.id,
               'username': user.username,
@@ -968,18 +1041,22 @@ class AppState extends ChangeNotifier {
       final body = jsonDecode(response.body) as Map<String, dynamic>;
 
       if (response.statusCode == 200) {
-        final rawRoles = (body['roles'] as List).cast<String>();
+        final userData = (body['user'] ?? body) as Map<String, dynamic>;
+        final rawRoles = (userData['roles'] as List?)?.cast<String>() ?? [];
+        _jwtToken = body['token'] as String?;
         currentUser = AppUser(
-          id: body['id'] as String,
-          username: body['username'] as String,
-          fullName: body['fullName'] as String,
-          email: body['email'] as String,
+          id: userData['id'] as String,
+          username: userData['username'] as String,
+          fullName: userData['fullName'] as String,
+          email: userData['email'] as String,
           password: '',
-          area: (body['area'] as String?) ?? '',
+          area: (userData['area'] as String?) ?? '',
           roles: rawRoles.map((r) => UserRole.values.byName(r)).toList(),
-          isActive: body['isActive'] as bool,
+          isActive: userData['isActive'] as bool,
         );
         notifyListeners();
+        await loadUsersFromBackend();
+        await loadAssetsFromBackend();
         return null;
       }
       final message =
@@ -1020,7 +1097,10 @@ class AppState extends ChangeNotifier {
     assets.remove(asset);
     notifyListeners();
     http
-        .delete(Uri.parse('$_backendUrl/api/assets/${asset.code}'))
+        .delete(
+          Uri.parse('$_backendUrl/api/assets/${asset.code}'),
+          headers: _authHeaders,
+        )
         .timeout(const Duration(seconds: 10))
         .catchError((e) => debugPrint('deleteAsset backend error: $e'));
   }
@@ -1048,7 +1128,7 @@ class AppState extends ChangeNotifier {
         final res = await http
             .post(
               Uri.parse('$_backendUrl/api/assets'),
-              headers: {'Content-Type': 'application/json'},
+              headers: _authHeaders,
               body: jsonEncode({
                 'code': asset.code,
                 'name': asset.name,
@@ -1083,7 +1163,7 @@ class AppState extends ChangeNotifier {
           http
               .post(
                 Uri.parse('$_backendUrl/api/assets/${asset.code}/history'),
-                headers: {'Content-Type': 'application/json'},
+                headers: _authHeaders,
                 body: jsonEncode({
                   'action': 'CREACION',
                   'detail': 'Activo registrado',
@@ -1250,7 +1330,7 @@ class AppState extends ChangeNotifier {
       http
           .patch(
             Uri.parse('$_backendUrl/api/assets/${asset.code}'),
-            headers: {'Content-Type': 'application/json'},
+            headers: _authHeaders,
             body: jsonEncode(patchBody),
           )
           .timeout(
@@ -1272,7 +1352,7 @@ class AppState extends ChangeNotifier {
               http
                   .post(
                     Uri.parse('$_backendUrl/api/assets/${asset.code}/history'),
-                    headers: {'Content-Type': 'application/json'},
+                    headers: _authHeaders,
                     body: jsonEncode({
                       'action': 'ACTUALIZACION',
                       'detail': changes.join(' | '),
@@ -1308,7 +1388,7 @@ class AppState extends ChangeNotifier {
   Future<void> loadAssetsFromBackend() async {
     try {
       final response = await http
-          .get(Uri.parse('$_backendUrl/api/assets'))
+          .get(Uri.parse('$_backendUrl/api/assets'), headers: _authHeaders)
           .timeout(const Duration(seconds: 30));
       debugPrint(
         '[loadAssets] respuesta ${response.statusCode}, tamaño=${response.body.length} bytes',
@@ -1346,7 +1426,7 @@ class AppState extends ChangeNotifier {
     String code,
   ) async {
     final response = await http
-        .get(Uri.parse('$_backendUrl/api/assets/$code'))
+        .get(Uri.parse('$_backendUrl/api/assets/$code'), headers: _authHeaders)
         .timeout(const Duration(seconds: 15));
     if (response.statusCode == 200) {
       final body = jsonDecode(response.body) as Map<String, dynamic>;
@@ -2123,7 +2203,7 @@ class DashboardPage extends StatelessWidget {
           children: [
             _metricCard(
               'Activos',
-              state.assets.length.toString(),
+              state.visibleAssets.length.toString(),
               Icons.inventory_2_outlined,
               const Color(0xFF00804E),
             ),
@@ -2815,7 +2895,7 @@ class _AssetsPageState extends State<AssetsPage> {
   @override
   Widget build(BuildContext context) {
     final query = _searchController.text.toLowerCase();
-    final filtered = widget.state.assets.where((a) {
+    final filtered = widget.state.visibleAssets.where((a) {
       if (query.isEmpty) {
         return true;
       }
@@ -4382,7 +4462,7 @@ class _ReportsPageState extends State<ReportsPage> {
   @override
   void initState() {
     super.initState();
-    currentReport = widget.state.assets;
+    currentReport = widget.state.visibleAssets;
   }
 
   @override
