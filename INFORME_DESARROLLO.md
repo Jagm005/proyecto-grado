@@ -492,7 +492,6 @@ bool _notifVisibleToMe(AppNotification n) {
 | CP-04 | Escaneo de QR de activo existente | Navegación al detalle del activo sin recargar la lista | ✅ Pasó |
 | CP-05 | Generación de reporte PDF con 50 activos | Archivo PDF descargado con todos los activos filtrados | ✅ Pasó |
 | CP-06 | Acceso a módulo de Usuarios con rol Auditor | Opción no visible en el menú (control por RBAC) | ✅ Pasó |
-| CP-07 | Backend caído, modo local activado | App carga datos desde SharedPreferences sin errores | ✅ Pasó |
 
 ### 4.3 Resultado del Análisis Estático
 
